@@ -1,35 +1,88 @@
+#include <string>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <chrono>
+#include <thread>
 
-// 1. Test that Boost is linked correctly by including a header 
-//    and using a macro it provides.
-#include <boost/version.hpp>
+#include "blockingconcurrentqueue.h"
 
-// 2. Test that the compiler can find the websocketpp headers.
-//    We don't need to use the library yet, just successfully include it.
-#include <websocketpp/config/asio_no_tls.hpp>
-#include <websocketpp/client.hpp>
+struct PriceUpdate {
+  std::string symbol;
+  double price;
+  /** TODO: Add timestamp, etc. */
+};
 
-// Define a placeholder type for the test include
-typedef websocketpp::client<websocketpp::config::asio> client;
+void io_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
+  std::cout << "IO Thread: Starting Up..." << std::endl;
+
+  std::ifstream inputFile("trade_data_coinbase.csv");
+  if (!inputFile.is_open()) {
+    std::cerr << "Error: Could not open file." << std::endl;
+    return;
+  }
+
+  std::string line;
+  char delimiter = ',';
+  std::getline(inputFile, line);
+
+  while (std::getline(inputFile, line)) {
+    std::stringstream ss(line);
+
+    std::string timestamp_str, symbol_str, price_str, quantity_str;
+
+    std::getline(ss, timestamp_str, delimiter);
+    std::getline(ss, symbol_str, delimiter);
+    std::getline(ss, price_str, delimiter);
+    std::getline(ss, quantity_str, delimiter);
+
+    PriceUpdate new_update;
+    new_update.symbol = symbol_str;
+    new_update.price = std::stod(price_str);
+
+    queue.enqueue(new_update);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  std::cout << "IO Thread: Finished reading file. Sending poison pill." << std::endl;
+
+  PriceUpdate poison_pill;
+  poison_pill.symbol = "STOP";
+  queue.enqueue(poison_pill);
+}
+
+void logic_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
+  std::cout << "Logic Thread: Starting Up and Waiting for Data..." << std::endl;
+
+  while(true) {
+    PriceUpdate received_update;
+
+    queue.wait_dequeue(received_update);
+
+    if (received_update.symbol == "STOP") {
+      std::cout << "Logic Thread: Poison pill received. Shutting down." << std::endl;
+      break;
+    }
+
+    std::cout << "Logic Thread: Dequeued update for " << received_update.symbol << " at price " << received_update.price << std::endl;
+    
+    /** TODO: add core logic */
+  }
+}
 
 int main() {
-  // Print a startup message
-  std::cout << "Arbitrage Engine starting up..." << std::endl;
+  std::cout << "Creating and Launching Threads..." << std::endl;
 
-  // --- Verification ---
+  moodycamel::BlockingConcurrentQueue<PriceUpdate> shared_queue;
 
-  // Verify Boost Linking
-  // The BOOST_LIB_VERSION macro is a string like "1_85" provided by Boost's headers
-  std::cout << "Test 1: Boost library linking..." << std::endl;
-  std::cout << "  - Boost version: " << BOOST_LIB_VERSION << std::endl;
-  std::cout << "  - Test PASSED." << std::endl;
+  std::thread io_thread(io_thread_fn, shared_queue);
+  std::thread logic_thread(logic_thread_fn, shared_queue);
 
-  // Verify websocketpp Header Inclusion
-  std::cout << "Test 2: WebSocket++ header inclusion..." << std::endl;
-  std::cout << "  - Headers included successfully." << std::endl;
-  std::cout << "  - Test PASSED." << std::endl;
+  std::cout << "Main: Threads launched." << std::endl;
 
-  std::cout << "\nCMake configuration appears to be working correctly!" << std::endl;
+  io_thread.join();
+  logic_thread.join();
 
   return 0;
 }
