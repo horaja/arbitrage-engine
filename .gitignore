@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+*.egg-info/
+dist/
+build/
+*.env
+
+# C++ build artifacts
+build/
+*.o
+*.out
+*.exe
+*.so
+*.a
+*.dll
+
+# IDE and OS specific
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# User-specific files
+trade_data.csv
+latency_training_data.csv
