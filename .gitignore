@@ -27,3 +27,6 @@ build/
 # User-specific files
 trade_data.csv
 latency_training_data.csv
+
+# TODO
+TODO.md

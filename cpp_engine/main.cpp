@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "blockingconcurrentqueue.h"
+#include "arbitragegraph.h"
 
 struct PriceUpdate {
   std::string symbol;
