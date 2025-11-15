@@ -19,14 +19,6 @@ This project is a high-performance triangular arbitrage detection engine built i
     * Python: pandas, websockets, scikit-learn, GPy
 * **Build System:** CMake
 
-## Project Status
-
-* **Phase 1: Data Acquisition & Environment Setup:** Complete
-* **Phase 2: Core C++ Arbitrage Engine:** In Progress
-* **Phase 3: Data Logging for ML Model:** Not Started
-* **Phase 4: Python ML Latency Model:** Not Started
-* **Phase 5: Integration and Final Testing:** Not Started
-
 ## Setup and Usage
 
 ### Prerequisites
