@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <deque>
 #include <unordered_map>
 #include <optional>
 #include <cstdint>
@@ -36,6 +37,14 @@ public:
    * or nullopt if no opportunity is found.
    */
   std::optional<std::vector<std::string>> find_arbitrage_cycle();
+
+  /**
+   * @brief Gets the negative-log weight of a specific edge
+   * @param source_currency the starting currency name
+   * @param dest_currency the destination currency name
+   * @return the negative-log weight of the edge, or infinity if not found
+   */
+  double get_edge_weight(const std::string& source_currency, const std::string& dest_currency) const;
 
 private:
   /**

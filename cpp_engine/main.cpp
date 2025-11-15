@@ -5,7 +5,7 @@
 #include <chrono>
 #include <thread>
 
-#include "blockingconcurrentqueue.h"
+#include "spsc_queue.h"
 #include "arbitragegraph.h"
 
 struct PriceUpdate {
@@ -14,7 +14,15 @@ struct PriceUpdate {
   /** TODO: Add timestamp, etc. */
 };
 
-void io_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
+// Helper function to trim leading/trailing whitespace
+std::string trim(const std::string& str) {
+  size_t start = str.find_first_not_of(" \t\r\n");
+  if (start == std::string::npos) return "";
+  size_t end = str.find_last_not_of(" \t\r\n");
+  return str.substr(start, end - start + 1);
+}
+
+void io_thread_fn(SPSCQueue<PriceUpdate>& queue) {
   std::cout << "IO Thread: Starting Up..." << std::endl;
 
   std::ifstream inputFile("trade_data_coinbase.csv");
@@ -38,8 +46,8 @@ void io_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
     std::getline(ss, quantity_str, delimiter);
 
     PriceUpdate new_update;
-    new_update.symbol = symbol_str;
-    new_update.price = std::stod(price_str);
+    new_update.symbol = trim(symbol_str);
+    new_update.price = std::stod(trim(price_str));
 
     queue.enqueue(new_update);
 
@@ -53,7 +61,7 @@ void io_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
   queue.enqueue(poison_pill);
 }
 
-void logic_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
+void logic_thread_fn(SPSCQueue<PriceUpdate>& queue, ArbitrageGraph& graph) {
   std::cout << "Logic Thread: Starting Up and Waiting for Data..." << std::endl;
 
   while(true) {
@@ -68,17 +76,28 @@ void logic_thread_fn(moodycamel::BlockingConcurrentQueue<PriceUpdate> queue) {
 
     std::cout << "Logic Thread: Dequeued update for " << received_update.symbol << " at price " << received_update.price << std::endl;
     
-    /** TODO: add core logic */
+    graph.update_price(received_update.symbol, received_update.price);
+
+    std::optional<std::vector<std::string>> cycle_optional = graph.find_arbitrage_cycle();
+
+    if (cycle_optional) {
+      
+    }
   }
 }
 
 int main() {
   std::cout << "Creating and Launching Threads..." << std::endl;
 
-  moodycamel::BlockingConcurrentQueue<PriceUpdate> shared_queue;
+  /** TODO: Make this more automatic */
+  const std::vector<std::string> symbols = {"BTC-USD", "ETH-USD", "ETH-BTC"};
 
-  std::thread io_thread(io_thread_fn, shared_queue);
-  std::thread logic_thread(logic_thread_fn, shared_queue);
+  ArbitrageGraph graph(symbols);
+
+  SPSCQueue<PriceUpdate> shared_queue;
+
+  std::thread io_thread(io_thread_fn, std::ref(shared_queue));
+  std::thread logic_thread(logic_thread_fn, std::ref(shared_queue), std::ref(graph));
 
   std::cout << "Main: Threads launched." << std::endl;
 
