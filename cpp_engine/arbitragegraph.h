@@ -83,7 +83,10 @@ private:
   
   /// @brief Counts updates to each vertex's distance to detect negative cycles.
   std::vector<int> update_counts;
-  
+
+  /// @brief Tracks whether a vertex is currently in the dirty_vertices queue (prevents duplicates).
+  std::vector<bool> in_queue;
+
   /// @brief Queue of vertices whose distances have been updated, for SPFA optimization.
   std::deque<int> dirty_vertices;
 
@@ -97,10 +100,5 @@ private:
    */
   uint64_t create_edge_key(int source_id, int destination_id) const;
 
-  /**
-   * @brief Reconstructs the arbitrage cycle path from the predecessor list.
-   * @param start_node A node within the detected negative cycle.
-   * @return A vector of currency strings representing the arbitrage path.
-   */
-  std::vector<std::string> reconstruct_cycle(int start_node) const;
+  std::optional<std::vector<std::string>> reconstruct_cycle(int start_node) const;
 };

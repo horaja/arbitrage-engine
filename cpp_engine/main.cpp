@@ -4,6 +4,7 @@
 #include <sstream>
 #include <chrono>
 #include <thread>
+#include <cmath>
 
 #include "spsc_queue.h"
 #include "arbitragegraph.h"
@@ -74,14 +75,30 @@ void logic_thread_fn(SPSCQueue<PriceUpdate>& queue, ArbitrageGraph& graph) {
       break;
     }
 
-    std::cout << "Logic Thread: Dequeued update for " << received_update.symbol << " at price " << received_update.price << std::endl;
-    
     graph.update_price(received_update.symbol, received_update.price);
 
     std::optional<std::vector<std::string>> cycle_optional = graph.find_arbitrage_cycle();
 
     if (cycle_optional) {
-      
+      const auto& cycle = cycle_optional.value();
+
+      double weight_sum = 0.0;
+      for (size_t i = 0; i < cycle.size() - 1; i++) {
+        weight_sum += graph.get_edge_weight(cycle[i], cycle[i + 1]);
+      }
+
+      double profit_multiplier = std::exp(-weight_sum);
+      double profit_percent = (profit_multiplier - 1.0) * 100.0;
+
+      if (profit_percent > 0) {
+        std::cout << "\nARBITRAGE OPPORTUNITY\n";
+        std::cout << "Cycle: ";
+        for (size_t i = 0; i < cycle.size(); i++) {
+          std::cout << cycle[i];
+          if (i < cycle.size() - 1) std::cout << " -> ";
+        }
+        std::cout << "\nProfit: " << profit_percent << "%\n" << std::endl;
+      }
     }
   }
 }

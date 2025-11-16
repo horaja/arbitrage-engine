@@ -33,6 +33,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <algorithm>
 
 /**
  * @brief Creates a unique 64-bit key for an edge.
@@ -43,6 +44,32 @@
  */
 uint64_t ArbitrageGraph::create_edge_key(int source_id, int dest_id) const {
   return (static_cast<uint64_t>(source_id) << 32) | dest_id;
+}
+
+/**
+ * @brief Gets the weight of a specific edge in the graph.
+ * @param source_currency Starting currency
+ * @param dest_currency Destination currency
+ * @return Edge weight, or infinity if edge doesn't exist
+ */
+double ArbitrageGraph::get_edge_weight(const std::string& source_currency, const std::string& dest_currency) const {
+  auto source_iter = currency_to_id.find(source_currency);
+  auto dest_iter = currency_to_id.find(dest_currency);
+
+  if (source_iter == currency_to_id.end() || dest_iter == currency_to_id.end()) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  int source_id = source_iter->second;
+  int dest_id = dest_iter->second;
+  uint64_t key = create_edge_key(source_id, dest_id);
+
+  auto edge_iter = edge_index_map.find(key);
+  if (edge_iter == edge_index_map.end()) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  return adjacency_list[source_id][edge_iter->second].weight;
 }
 
 /**
@@ -80,9 +107,12 @@ ArbitrageGraph::ArbitrageGraph(const std::vector<std::string>& symbols) {
   this->distance.resize(num_vertices, std::numeric_limits<double>::infinity());
   this->predecessor.resize(num_vertices, -1);
   this->update_counts.resize(num_vertices, 0);
-  
-  this->distance[0] = 0.0;
-  
+  this->in_queue.resize(num_vertices, false);
+
+  // Initialize all vertices to distance 0 for negative cycle detection
+  for (int i = 0; i < num_vertices; i++) {
+    distance[i] = 0.0;
+  }
 }
 
 /**
@@ -154,35 +184,55 @@ void ArbitrageGraph::update_price(const std::string& symbol, double price) {
 
 /**
  * @brief Finds a negative weight cycle in the graph, which represents an arbitrage opportunity.
- * 
+ *
  * This function implements the Shortest Path Faster Algorithm (SPFA). It iteratively
  * "relaxes" the edges of the graph, updating the shortest known distance from the source
  * to each vertex. If it detects that a vertex has been updated more times than there are
  * vertices in the graph, it signifies the presence of a negative weight cycle.
- * 
+ *
+ * Key optimizations:
+ * - Only processes vertices affected by recent price updates (dirty_vertices)
+ * - Prevents duplicate queue entries with in_queue tracking
+ * - Resets state between calls for correctness
+ *
  * @return An `std::optional` containing a vector of currency names in the cycle if one is found,
  * or `std::nullopt` if no opportunity exists.
  */
 std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
-  
-  while (!dirty_vertices.empty()) {
-  
-    int u = dirty_vertices.front();
-    dirty_vertices.pop_front();
+
+  std::deque<int> processing_queue = dirty_vertices;
+  for (int vertex : processing_queue) {
+    in_queue[vertex] = true;
+  }
+  dirty_vertices.clear();
+
+  while (!processing_queue.empty()) {
+
+    int u = processing_queue.front();
+    processing_queue.pop_front();
+    in_queue[u] = false;
 
     for (const auto& edge : adjacency_list[u]) {
 
       int v = edge.destination_id;
       double weight = edge.weight;
 
-      if (distance[u] != std::numeric_limits<double>::infinity() && distance[u] + weight < distance[v]) {
+      if (distance[u] + weight < distance[v]) {
         distance[v] = distance[u] + weight;
         predecessor[v] = u;
-        dirty_vertices.push_back(v);
+
+        if (!in_queue[v]) {
+          processing_queue.push_back(v);
+          in_queue[v] = true;
+        }
 
         update_counts[v]++;
         if (update_counts[v] >= num_vertices) {
-          return reconstruct_cycle(v);
+          auto cycle = reconstruct_cycle(v);
+          if (cycle) {
+            std::fill(update_counts.begin(), update_counts.end(), 0);
+            return cycle;
+          }
         }
       }
     }
@@ -201,19 +251,25 @@ std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
  * @param start_node A node that is part of the detected negative cycle.
  * @return A vector of strings representing the currencies in the arbitrage cycle.
  */
-std::vector<std::string> ArbitrageGraph::reconstruct_cycle(int start_node) const {
+std::optional<std::vector<std::string>> ArbitrageGraph::reconstruct_cycle(int start_node) const {
   std::vector<std::string> cycle;
   std::vector<int> path;
 
   int current = start_node;
   for (int i = 0; i < num_vertices; i++) {
-    current = predecessor.at(current);
+    if (predecessor[current] == -1) {
+      return std::nullopt;
+    }
+    current = predecessor[current];
   }
 
   int cycle_start = current;
   do {
     path.insert(path.begin(), current);
-    current = predecessor.at(current);
+    if (predecessor[current] == -1) {
+      return std::nullopt;
+    }
+    current = predecessor[current];
   } while (current != cycle_start);
   path.insert(path.begin(), cycle_start);
 
@@ -223,3 +279,4 @@ std::vector<std::string> ArbitrageGraph::reconstruct_cycle(int start_node) const
 
   return cycle;
 }
+
