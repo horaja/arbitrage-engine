@@ -29,11 +29,13 @@
  */
 
 #include "arbitragegraph.h"
-#include <set>
+
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
-#include <algorithm>
+#include <set>
+#include <stdexcept>
 
 /**
  * @brief Creates a unique 64-bit key for an edge.
@@ -199,6 +201,10 @@ void ArbitrageGraph::update_price(const std::string& symbol, double price) {
  * or `std::nullopt` if no opportunity exists.
  */
 std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
+  std::fill(distance.begin(), distance.end(), 0.0);
+  std::fill(predecessor.begin(), predecessor.end(), -1);
+  std::fill(update_counts.begin(), update_counts.end(), 0);
+  std::fill(in_queue.begin(), in_queue.end(), false);
 
   std::deque<int> processing_queue = dirty_vertices;
   for (int vertex : processing_queue) {
@@ -239,7 +245,6 @@ std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
   }
 
   return std::nullopt;
-
 }
 
 /**
@@ -279,4 +284,3 @@ std::optional<std::vector<std::string>> ArbitrageGraph::reconstruct_cycle(int st
 
   return cycle;
 }
-
