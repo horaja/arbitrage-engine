@@ -4,17 +4,16 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <thread>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "arbitragegraph.h"
+#include "replay_adapter.h"
 #include "spsc_queue.h"
 
 namespace {
@@ -39,54 +38,6 @@ struct ReplayMessage {
     return ReplayMessage{};
   }
 };
-
-std::string trim(const std::string& value) {
-  const std::size_t start = value.find_first_not_of(" \t\r\n");
-  if (start == std::string::npos) {
-    return "";
-  }
-
-  const std::size_t end = value.find_last_not_of(" \t\r\n");
-  return value.substr(start, end - start + 1);
-}
-
-bool read_next_event(std::istream& input_stream, MarketEvent& event, std::string& error_message) {
-  std::string line;
-  if (!std::getline(input_stream, line)) {
-    return false;
-  }
-
-  std::stringstream row_stream(line);
-  std::string timestamp_field;
-  std::string symbol_field;
-  std::string price_field;
-  std::string quantity_field;
-
-  if (!std::getline(row_stream, timestamp_field, ',') ||
-      !std::getline(row_stream, symbol_field, ',') ||
-      !std::getline(row_stream, price_field, ',') ||
-      !std::getline(row_stream, quantity_field, ',')) {
-    error_message = "Malformed CSV row: " + line;
-    return false;
-  }
-
-  try {
-    event.exchange_timestamp = trim(timestamp_field);
-    event.symbol = trim(symbol_field);
-    event.price = std::stod(trim(price_field));
-    event.quantity = std::stod(trim(quantity_field));
-  } catch (const std::exception& exception) {
-    error_message = "Failed to parse CSV row: " + line + " (" + exception.what() + ")";
-    return false;
-  }
-
-  if (event.symbol.empty()) {
-    error_message = "Encountered an empty symbol in CSV row: " + line;
-    return false;
-  }
-
-  return true;
-}
 
 LatencySummary summarize_latencies(std::vector<std::uint64_t> latencies_ns) {
   LatencySummary summary;
@@ -149,58 +100,34 @@ void print_opportunity(const OpportunitySummary& opportunity) {
   std::cout << "\nProfit: " << opportunity.profit_percent << "%\n" << std::endl;
 }
 
+std::unique_ptr<Clock> make_clock(const EngineConfig& config) {
+  if (config.clock_mode == ClockMode::WallTime && config.replay_delay_ms > 0) {
+    return std::make_unique<FixedDelayClock>(std::chrono::milliseconds(config.replay_delay_ms));
+  }
+
+  return std::make_unique<LogicalReplayClock>();
+}
+
+std::unique_ptr<ReplayAdapter> make_replay_adapter(const EngineConfig& config) {
+  return std::make_unique<CsvReplayAdapter>(config.input_path);
+}
+
+bool extract_trade_tick(
+    const MarketEvent& event,
+    TradeTick& trade_tick,
+    std::string& error_message) {
+  if (event.event_type != MarketEventType::TradeTick || !event.trade_tick.has_value()) {
+    error_message = "Unsupported market event payload for symbol: " + event.symbol;
+    return false;
+  }
+
+  trade_tick = event.trade_tick.value();
+  return true;
+}
+
 }  // namespace
 
 ReplayRunner::ReplayRunner(EngineConfig config) : config_(std::move(config)) {}
-
-std::optional<CsvReplaySource::Metadata> CsvReplaySource::inspect(
-    const std::string& input_path,
-    std::string& error_message) {
-  std::ifstream input_stream(input_path);
-  if (!input_stream.is_open()) {
-    error_message = "Could not open input file: " + input_path;
-    return std::nullopt;
-  }
-
-  std::string header_line;
-  if (!std::getline(input_stream, header_line)) {
-    error_message = "Input file is empty: " + input_path;
-    return std::nullopt;
-  }
-
-  Metadata metadata;
-  std::unordered_set<std::string> seen_symbols;
-  MarketEvent event;
-
-  while (true) {
-    std::streampos row_start = input_stream.tellg();
-    std::string parse_error;
-    if (!read_next_event(input_stream, event, parse_error)) {
-      if (input_stream.eof()) {
-        break;
-      }
-
-      input_stream.clear();
-      input_stream.seekg(row_start);
-      std::string raw_row;
-      std::getline(input_stream, raw_row);
-      error_message = parse_error.empty() ? "Failed to parse CSV row: " + raw_row : parse_error;
-      return std::nullopt;
-    }
-
-    ++metadata.event_count;
-    if (seen_symbols.insert(event.symbol).second) {
-      metadata.symbols.push_back(event.symbol);
-    }
-  }
-
-  if (metadata.event_count == 0) {
-    error_message = "Input file does not contain any replay rows: " + input_path;
-    return std::nullopt;
-  }
-
-  return metadata;
-}
 
 RunSummary ReplayRunner::run() const {
   RunSummary summary;
@@ -210,49 +137,36 @@ RunSummary ReplayRunner::run() const {
     return summary;
   }
 
-  std::string validation_error;
-  const std::optional<CsvReplaySource::Metadata> metadata =
-      CsvReplaySource::inspect(config_.input_path, validation_error);
-  if (!metadata) {
-    summary.error_message = validation_error;
+  std::string adapter_error;
+  std::unique_ptr<ReplayAdapter> replay_adapter = make_replay_adapter(config_);
+  if (!replay_adapter->open(adapter_error)) {
+    summary.error_message = adapter_error;
     return summary;
   }
 
-  ArbitrageGraph graph(metadata->symbols);
+  ArbitrageGraph graph(replay_adapter->metadata().symbols);
   SPSCQueue<ReplayMessage> event_queue;
+  std::unique_ptr<Clock> replay_clock = make_clock(config_);
 
   std::atomic<std::size_t> max_queue_depth{0};
   std::atomic<bool> producer_failed{false};
+  std::atomic<bool> consumer_failed{false};
   std::mutex error_mutex;
   std::string producer_error_message;
+  std::string consumer_error_message;
   std::vector<std::uint64_t> logic_latencies_ns;
 
   const auto start_time = std::chrono::steady_clock::now();
 
   std::thread replay_thread([&]() {
-    std::ifstream input_stream(config_.input_path);
-    if (!input_stream.is_open()) {
-      {
-        std::lock_guard<std::mutex> lock(error_mutex);
-        producer_error_message = "Could not reopen input file during replay: " + config_.input_path;
-      }
-      producer_failed.store(true, std::memory_order_relaxed);
-      event_queue.enqueue(ReplayMessage::end_of_stream());
-      return;
-    }
-
-    std::string header_line;
-    std::getline(input_stream, header_line);
-
+    std::optional<MarketEvent> previous_event;
     MarketEvent event;
     std::string parse_error;
-    while (read_next_event(input_stream, event, parse_error)) {
+    while (replay_adapter->next_event(event, parse_error)) {
+      replay_clock->before_event(previous_event, event);
       event_queue.enqueue(ReplayMessage::from_event(event));
       update_max_depth(max_queue_depth, event_queue.size_approx());
-
-      if (config_.replay_sleep_ms > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(config_.replay_sleep_ms));
-      }
+      previous_event = event;
     }
 
     if (!parse_error.empty()) {
@@ -273,8 +187,19 @@ RunSummary ReplayRunner::run() const {
         break;
       }
 
+      TradeTick trade_tick;
+      std::string payload_error;
+      if (!extract_trade_tick(message.event, trade_tick, payload_error)) {
+        {
+          std::lock_guard<std::mutex> lock(error_mutex);
+          consumer_error_message = payload_error;
+        }
+        consumer_failed.store(true, std::memory_order_relaxed);
+        continue;
+      }
+
       const auto logic_start = std::chrono::steady_clock::now();
-      graph.update_price(message.event.symbol, message.event.price);
+      graph.update_price(message.event.symbol, trade_tick.price);
       const auto cycle = graph.find_arbitrage_cycle();
       const auto logic_end = std::chrono::steady_clock::now();
 
@@ -316,6 +241,12 @@ RunSummary ReplayRunner::run() const {
   if (producer_failed.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> lock(error_mutex);
     summary.error_message = producer_error_message;
+    return summary;
+  }
+
+  if (consumer_failed.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> lock(error_mutex);
+    summary.error_message = consumer_error_message;
     return summary;
   }
 

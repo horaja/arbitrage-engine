@@ -43,10 +43,13 @@ int main(int argc, char* argv[]) {
     }
 
     if (argument == "--sleep-ms" && index + 1 < argc) {
-      if (!parse_non_negative_int(argv[++index], config.replay_sleep_ms)) {
+      if (!parse_non_negative_int(argv[++index], config.replay_delay_ms)) {
         std::cerr << "Invalid value for --sleep-ms.\n";
         print_usage();
         return 1;
+      }
+      if (config.replay_delay_ms > 0) {
+        config.clock_mode = ClockMode::WallTime;
       }
       continue;
     }

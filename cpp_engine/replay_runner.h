@@ -6,12 +6,8 @@
 #include <string>
 #include <vector>
 
-struct MarketEvent {
-  std::string exchange_timestamp;
-  std::string symbol;
-  double price = 0.0;
-  double quantity = 0.0;
-};
+#include "clock.h"
+#include "market_event.h"
 
 struct OpportunitySummary {
   std::vector<std::string> cycle;
@@ -29,7 +25,8 @@ struct LatencySummary {
 
 struct EngineConfig {
   std::string input_path;
-  int replay_sleep_ms = 5;
+  int replay_delay_ms = 0;
+  ClockMode clock_mode = ClockMode::ReplayTime;
   bool quiet = false;
 };
 
@@ -51,14 +48,4 @@ public:
 
 private:
   EngineConfig config_;
-};
-
-class CsvReplaySource {
-public:
-  struct Metadata {
-    std::vector<std::string> symbols;
-    std::size_t event_count = 0;
-  };
-
-  static std::optional<Metadata> inspect(const std::string& input_path, std::string& error_message);
 };

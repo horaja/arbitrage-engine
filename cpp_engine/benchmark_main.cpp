@@ -15,7 +15,8 @@ void print_usage() {
 int main(int argc, char* argv[]) {
   EngineConfig config;
   config.quiet = true;
-  config.replay_sleep_ms = 0;
+  config.replay_delay_ms = 0;
+  config.clock_mode = ClockMode::ReplayTime;
 
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
