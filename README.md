@@ -1,63 +1,57 @@
-# Latency-Aware, Risk-Aware Triangular Arbitrage Engine
+# Arbitrage Engine Prototype
 
-This project is a high-performance triangular arbitrage detection engine built in C++ for cryptocurrency markets. It identifies risk-free profit opportunities and uses a sophisticated Gaussian Process model, trained in Python, to predict execution latency. This ensures the system only attempts trades with a high probability of success, making it a robust and practical automated trading system.
+This repository is a replay-driven triangular arbitrage prototype with a C++ hot path. The current codebase replays CSV market data, updates a graph-backed market model, and reports detected arbitrage cycles.
 
-## Key Features
+`implementation_plan.md` is the forward roadmap for the replay-first engine, benchmark work, and later risk-modeling extensions. Those later phases are not implemented yet.
 
-* **High-Performance Core:** The arbitrage detection logic is written in C++ for maximum performance.
-* **Multi-threaded Architecture:** Decouples data ingestion from the core trading logic using concurrent queues.
-* **Graph-Based Detection:** Models the market as a graph and uses the Bellman-Ford algorithm to find arbitrage opportunities (negative weight cycles).
-* **Probabilistic Latency Modeling:** Employs a Gaussian Process (GP) regressor to provide a probabilistic forecast of round-trip execution latency, preventing trades with high timing risk.
-* **Risk-Aware Logic:** The core C++ engine is parameterized by the ML model's output, only executing trades that are predicted to be profitable *after* accounting for latency risk.
+## Current Scope
 
-## Technology Stack
+- CSV replay into a two-thread pipeline
+- Lock-free SPSC queue between replay and strategy stages
+- Graph-based arbitrage detection in C++
+- Native smoke tests and a lightweight benchmark entrypoint
 
-* **Core Engine:** C++
-* **ML Model & Data Logging:** Python
-* **Key Libraries:**
-    * C++: Boost, websocketpp, Eigen
-    * Python: pandas, websockets, scikit-learn, GPy
-* **Build System:** CMake
+## Build
 
-## Setup and Usage
+Requirements:
 
-### Prerequisites
-* A C++ compiler (GCC, Clang)
-* CMake
-* Python 3.8+
-* Boost Libraries
+- CMake 3.18+
+- A C++17 compiler
 
-### Installation & Setup
+From the repository root:
 
-1.  **Clone the repository:**
-    ```bash
-    git clone [Your Repository URL]
-    cd [repository-name]
-    ```
-2.  **Setup Python Environment:**
-    ```bash
-    cd python_utils
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
-    ```
-3.  **Build the C++ Engine:**
-    ```bash
-    cd ../cpp_engine
-    mkdir build && cd build
-    cmake ..
-    make
-    ```
+```bash
+cmake -S cpp_engine -B build
+cmake --build build
+```
 
-### Running the Project
+## Run
 
-1.  **Start the Data Logger:**
-    ```bash
-    # From the python_utils directory
-    python data_logger.py
-    ```
-2.  **Run the C++ Engine:**
-    ```bash
-    # From the cpp_engine/build directory
-    ./arbitrage_engine
-    ```
+Run the prototype engine against the checked-in replay fixture:
+
+```bash
+./build/arb_engine --input fixtures/sample_replay.csv
+```
+
+Run the benchmark:
+
+```bash
+./build/arb_benchmark --input fixtures/sample_replay.csv
+```
+
+Run the smoke tests:
+
+```bash
+./build/smoke_tests
+```
+
+## Optional Python Logger
+
+`python_utils/data_logger.py` can collect live trade data into the same CSV shape used by the replay path.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r python_utils/requirements.txt
+python python_utils/data_logger.py
+```
