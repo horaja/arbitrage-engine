@@ -90,7 +90,6 @@ graph LR
   - Add `MarketDataAdapter` and `ExecutionAdapter` interfaces so replay and live modes share the same core engine.
   - Only after replay results remain credible should the repo grow live-feed handling and operational concerns.
   - Networking and HFT-specific topics such as socket tuning, hardware timestamping, kernel bypass, and FPGA stay in the documented future-extension track until a real live path exists.
-	  - For FPGA, consider using $\texttt{HardCaml}$ programming to recruit for *JS*
 
 ## Interfaces / Types To Add
 - `struct MarketEvent`
