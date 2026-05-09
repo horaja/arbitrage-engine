@@ -69,7 +69,13 @@ int main() {
     all_passed &= require(summary.total_events_seen == 6, "sample replay should see 6 total events");
     all_passed &= require(summary.events_processed == 6, "sample replay should process 6 events");
     all_passed &= require(summary.arbitrage_detections == 0, "sample replay has realistic spreads and should detect no arbitrage");
+    all_passed &= require(summary.producer_elapsed_seconds > 0.0, "sample replay should record producer elapsed time");
+    all_passed &= require(summary.consumer_elapsed_seconds > 0.0, "sample replay should record consumer elapsed time");
+    all_passed &= require(summary.producer_events_per_second > 0.0, "sample replay should record producer throughput");
+    all_passed &= require(summary.consumer_events_per_second > 0.0, "sample replay should record consumer throughput");
     all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 6, "sample replay should record logic latency for every measured event");
+    all_passed &= require(summary.logic_latency.sample_count == 6, "sample replay logic latency sample count should match measured events");
+    all_passed &= require(summary.stage_latencies.adapter_next_event.sample_count == 6, "sample replay adapter sample count should match measured events");
     all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 6, "sample replay should record adapter timing for every measured event");
     all_passed &= require(summary.benchmark_samples.stage_latencies.pipeline_backlog_latency_ns.size() == 6, "sample replay should record pipeline backlog latency for every measured event");
     all_passed &= require(!summary.benchmark_samples.queue_depth_samples.empty(), "sample replay should record queue depth samples");
@@ -90,6 +96,7 @@ int main() {
     all_passed &= require(summary.succeeded, "warmup replay should succeed");
     all_passed &= require(summary.total_events_seen == 6, "warmup replay should still see the full replay");
     all_passed &= require(summary.events_processed == 4, "warmup replay should only measure post-warmup events");
+    all_passed &= require(summary.logic_latency.sample_count == 4, "warmup replay logic sample count should exclude warmup");
     all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 4, "warmup replay should only retain measured logic samples");
     all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 4, "warmup replay should only retain measured adapter samples");
     all_passed &= require(!summary.benchmark_samples.queue_depth_series.empty(), "warmup replay should still record queue depth series points");
@@ -108,6 +115,7 @@ int main() {
     all_passed &= require(summary.arbitrage_detections >= 1, "arb fixture should detect arbitrage");
     all_passed &= require(summary.last_opportunity.has_value(), "arb fixture should expose an opportunity");
     all_passed &= require(!summary.benchmark_samples.stage_latencies.opportunity_compute_ns.empty(), "arb fixture should record opportunity compute samples");
+    all_passed &= require(summary.stage_latencies.opportunity_compute.sample_count > 0, "arb fixture opportunity compute sample count should be positive");
     if (summary.last_opportunity.has_value()) {
       const auto& opportunity = summary.last_opportunity.value();
       all_passed &= require(opportunity.gross_profit_percent > 0.0, "arb fixture gross profit should be positive");
@@ -126,6 +134,7 @@ int main() {
     const RunSummary summary = ReplayRunner(config).run();
     all_passed &= require(summary.succeeded, "no-arb fixture should succeed");
     all_passed &= require(summary.arbitrage_detections == 0, "no-arb fixture should not detect arbitrage");
+    all_passed &= require(summary.stage_latencies.opportunity_compute.sample_count == 0, "no-arb fixture should not record opportunity compute samples");
   }
 
   {

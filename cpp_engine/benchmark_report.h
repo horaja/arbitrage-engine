@@ -23,7 +23,11 @@ struct BenchmarkSummary {
   std::size_t repeat_count = 0;
   NumericSummary total_events_seen;
   NumericSummary events_processed;
+  NumericSummary producer_elapsed_seconds;
+  NumericSummary consumer_elapsed_seconds;
   NumericSummary elapsed_seconds;
+  NumericSummary producer_events_per_second;
+  NumericSummary consumer_events_per_second;
   NumericSummary events_per_second;
   NumericSummary arbitrage_detections;
   NumericSummary avg_queue_depth;

@@ -37,8 +37,13 @@ def load_reports(paths: list[Path]) -> list[dict]:
         with path.open() as handle:
             report = json.load(handle)
         report["_path"] = str(path)
+        report["_stem"] = path.stem
         reports.append(report)
     return reports
+
+
+def latency_sample_count(summary: dict) -> int:
+    return int(summary.get("sample_count", 0))
 
 
 def backlog_latency_summary(report: dict) -> dict:
@@ -48,7 +53,7 @@ def backlog_latency_summary(report: dict) -> dict:
     return stage_latencies["queue_residence_latency"]
 
 
-def stage_avg_ns(report: dict) -> tuple[list[str], list[float]]:
+def stage_avg_ns(report: dict) -> tuple[list[str], list[float], list[int]]:
     stage_latencies = report["aggregate"]["stage_latencies"]
     names = [
         "adapter_next_event",
@@ -58,13 +63,21 @@ def stage_avg_ns(report: dict) -> tuple[list[str], list[float]]:
         "opportunity_compute",
     ]
     values = [stage_latencies[name]["avg_ns"] for name in names]
-    return names, values
+    sample_counts = [latency_sample_count(stage_latencies[name]) for name in names]
+    return names, values, sample_counts
+
+
+def report_output_dir(root_output_dir: Path, report: dict) -> Path:
+    output_dir = root_output_dir / report["_stem"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 
 def plot_stage_latency_bar(report: dict, output_dir: Path) -> None:
-    names, values = stage_avg_ns(report)
+    names, values, sample_counts = stage_avg_ns(report)
+    labels = [f"{name}\n(n={sample_count})" for name, sample_count in zip(names, sample_counts)]
     plt.figure(figsize=(10, 5))
-    plt.bar(names, values, color="#1f77b4")
+    plt.bar(labels, values, color="#1f77b4")
     plt.ylabel("Average latency (ns)")
     plt.title("Stage Latency Averages")
     plt.xticks(rotation=30, ha="right")
@@ -77,10 +90,11 @@ def plot_pipeline_backlog_latency(report: dict, output_dir: Path) -> None:
     backlog = backlog_latency_summary(report)
     labels = ["p50", "p95", "p99"]
     values = [backlog["p50_ns"], backlog["p95_ns"], backlog["p99_ns"]]
+    sample_count = latency_sample_count(backlog)
     plt.figure(figsize=(6, 4))
     plt.bar(labels, values, color="#9467bd")
     plt.ylabel("Latency (ns)")
-    plt.title("Pipeline Backlog Latency Percentiles")
+    plt.title(f"Pipeline Backlog Latency Percentiles (n={sample_count})")
     plt.tight_layout()
     plt.savefig(output_dir / "pipeline_backlog_latency.png")
     plt.close()
@@ -90,10 +104,11 @@ def plot_latency_percentiles(report: dict, output_dir: Path) -> None:
     logic = report["aggregate"]["logic_latency"]
     labels = ["p50", "p95", "p99"]
     values = [logic["p50_ns"], logic["p95_ns"], logic["p99_ns"]]
+    sample_count = latency_sample_count(logic)
     plt.figure(figsize=(6, 4))
     plt.bar(labels, values, color="#ff7f0e")
     plt.ylabel("Latency (ns)")
-    plt.title("Logic Latency Percentiles")
+    plt.title(f"Logic Latency Percentiles (n={sample_count})")
     plt.tight_layout()
     plt.savefig(output_dir / "latency_percentiles.png")
     plt.close()
@@ -125,10 +140,10 @@ def plot_queue_depth_summary(report: dict, output_dir: Path) -> None:
 def plot_queue_depth_over_event_index(report: dict, output_dir: Path) -> None:
     runs = report["runs"]
     if not runs:
-      return
+        return
     series = runs[0].get("queue_depth_series", [])
     if not series:
-      return
+        return
 
     plt.figure(figsize=(8, 4))
     plt.plot(
@@ -172,6 +187,15 @@ def plot_throughput_by_symbol_count(reports: list[dict], output_dir: Path) -> No
     plt.close()
 
 
+def render_report_plots(report: dict, root_output_dir: Path) -> None:
+    output_dir = report_output_dir(root_output_dir, report)
+    plot_stage_latency_bar(report, output_dir)
+    plot_pipeline_backlog_latency(report, output_dir)
+    plot_latency_percentiles(report, output_dir)
+    plot_queue_depth_summary(report, output_dir)
+    plot_queue_depth_over_event_index(report, output_dir)
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -184,12 +208,8 @@ def main() -> int:
         output_dir = args.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        first_report = reports[0]
-        plot_stage_latency_bar(first_report, output_dir)
-        plot_pipeline_backlog_latency(first_report, output_dir)
-        plot_latency_percentiles(first_report, output_dir)
-        plot_queue_depth_summary(first_report, output_dir)
-        plot_queue_depth_over_event_index(first_report, output_dir)
+        for report in reports:
+            render_report_plots(report, output_dir)
         plot_throughput_by_symbol_count(reports, output_dir)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         print(f"error: {error}")

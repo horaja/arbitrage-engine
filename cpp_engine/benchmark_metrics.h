@@ -5,6 +5,7 @@
 #include <vector>
 
 struct LatencySummary {
+  std::size_t sample_count = 0;
   std::uint64_t min_ns = 0;
   std::uint64_t avg_ns = 0;
   std::uint64_t p50_ns = 0;

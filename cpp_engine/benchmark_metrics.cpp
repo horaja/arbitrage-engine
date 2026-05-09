@@ -30,6 +30,7 @@ void append_value_vector(std::vector<T>& destination, std::vector<T>& source) {
 
 LatencySummary summarize_latencies(const std::vector<std::uint64_t>& latencies_ns) {
   LatencySummary summary;
+  summary.sample_count = latencies_ns.size();
   if (latencies_ns.empty()) {
     return summary;
   }

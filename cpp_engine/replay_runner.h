@@ -35,6 +35,10 @@ struct RunSummary {
   std::size_t arbitrage_detections = 0;
   std::size_t max_queue_depth = 0;
   QueueDepthSummary queue_depth;
+  double producer_elapsed_seconds = 0.0;
+  double consumer_elapsed_seconds = 0.0;
+  double producer_events_per_second = 0.0;
+  double consumer_events_per_second = 0.0;
   double elapsed_seconds = 0.0;
   LatencySummary logic_latency;
   StageLatencySummary stage_latencies;

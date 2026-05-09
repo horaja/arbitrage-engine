@@ -39,8 +39,14 @@ bool parse_size(const std::string& value, std::size_t& parsed_value) {
 void print_run_summary(const BenchmarkRunResult& run) {
   std::cout << "run " << run.run_index
             << ": events_processed=" << run.summary.events_processed
+            << " producer_elapsed_seconds=" << std::fixed << std::setprecision(6)
+            << run.summary.producer_elapsed_seconds
+            << " consumer_elapsed_seconds=" << run.summary.consumer_elapsed_seconds
             << " elapsed_seconds=" << std::fixed << std::setprecision(6)
             << run.summary.elapsed_seconds
+            << " producer_events_per_second=" << std::setprecision(2)
+            << run.summary.producer_events_per_second
+            << " consumer_events_per_second=" << run.summary.consumer_events_per_second
             << " events_per_second=" << std::setprecision(2)
             << run.events_per_second
             << " avg_queue_depth=" << std::fixed << std::setprecision(2)
@@ -57,8 +63,12 @@ void print_aggregate_summary(const BenchmarkSummary& summary) {
   std::cout << std::fixed << std::setprecision(2);
   std::cout << "events_processed_mean: " << summary.events_processed.mean << "\n";
   std::cout << std::setprecision(6);
+  std::cout << "producer_elapsed_seconds_mean: " << summary.producer_elapsed_seconds.mean << "\n";
+  std::cout << "consumer_elapsed_seconds_mean: " << summary.consumer_elapsed_seconds.mean << "\n";
   std::cout << "elapsed_seconds_mean: " << summary.elapsed_seconds.mean << "\n";
   std::cout << std::setprecision(2);
+  std::cout << "producer_events_per_second_mean: " << summary.producer_events_per_second.mean << "\n";
+  std::cout << "consumer_events_per_second_mean: " << summary.consumer_events_per_second.mean << "\n";
   std::cout << "events_per_second_mean: " << summary.events_per_second.mean << "\n";
   std::cout << "avg_queue_depth_mean: " << summary.avg_queue_depth.mean << "\n";
   std::cout << "p95_queue_depth_mean: " << summary.p95_queue_depth.mean << "\n";

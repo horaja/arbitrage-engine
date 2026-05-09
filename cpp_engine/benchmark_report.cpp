@@ -74,7 +74,10 @@ void write_latency_summary(
   write_indent(output, indent_level);
   output << "{\n";
   write_indent(output, indent_level + 1);
+  output << "\"sample_count\": " << summary.sample_count << ",\n";
+  write_indent(output, indent_level + 1);
   output << "\"min_ns\": " << summary.min_ns << ",\n";
+  write_indent(output, indent_level + 1);
   write_indent(output, indent_level + 1);
   output << "\"avg_ns\": " << summary.avg_ns << ",\n";
   write_indent(output, indent_level + 1);
@@ -167,9 +170,7 @@ void write_queue_depth_series(
 }  // namespace
 
 double compute_events_per_second(const RunSummary& summary) {
-  return summary.elapsed_seconds > 0.0
-      ? static_cast<double>(summary.events_processed) / summary.elapsed_seconds
-      : 0.0;
+  return summary.consumer_events_per_second;
 }
 
 BenchmarkSummary summarize_benchmark_runs(
@@ -180,7 +181,11 @@ BenchmarkSummary summarize_benchmark_runs(
 
   std::vector<double> total_events_seen;
   std::vector<double> events_processed;
+  std::vector<double> producer_elapsed_seconds;
+  std::vector<double> consumer_elapsed_seconds;
   std::vector<double> elapsed_seconds;
+  std::vector<double> producer_events_per_second;
+  std::vector<double> consumer_events_per_second;
   std::vector<double> events_per_second;
   std::vector<double> arbitrage_detections;
   std::vector<double> avg_queue_depth;
@@ -189,7 +194,11 @@ BenchmarkSummary summarize_benchmark_runs(
 
   total_events_seen.reserve(runs.size());
   events_processed.reserve(runs.size());
+  producer_elapsed_seconds.reserve(runs.size());
+  consumer_elapsed_seconds.reserve(runs.size());
   elapsed_seconds.reserve(runs.size());
+  producer_events_per_second.reserve(runs.size());
+  consumer_events_per_second.reserve(runs.size());
   events_per_second.reserve(runs.size());
   arbitrage_detections.reserve(runs.size());
   avg_queue_depth.reserve(runs.size());
@@ -199,8 +208,12 @@ BenchmarkSummary summarize_benchmark_runs(
   for (const auto& run : runs) {
     total_events_seen.push_back(static_cast<double>(run.summary.total_events_seen));
     events_processed.push_back(static_cast<double>(run.summary.events_processed));
+    producer_elapsed_seconds.push_back(run.summary.producer_elapsed_seconds);
+    consumer_elapsed_seconds.push_back(run.summary.consumer_elapsed_seconds);
     elapsed_seconds.push_back(run.summary.elapsed_seconds);
-    events_per_second.push_back(run.events_per_second);
+    producer_events_per_second.push_back(run.summary.producer_events_per_second);
+    consumer_events_per_second.push_back(run.summary.consumer_events_per_second);
+    events_per_second.push_back(run.summary.consumer_events_per_second);
     arbitrage_detections.push_back(static_cast<double>(run.summary.arbitrage_detections));
     avg_queue_depth.push_back(run.summary.queue_depth.avg_depth);
     p95_queue_depth.push_back(static_cast<double>(run.summary.queue_depth.p95_depth));
@@ -209,7 +222,11 @@ BenchmarkSummary summarize_benchmark_runs(
 
   summary.total_events_seen = summarize_numeric_values(total_events_seen);
   summary.events_processed = summarize_numeric_values(events_processed);
+  summary.producer_elapsed_seconds = summarize_numeric_values(producer_elapsed_seconds);
+  summary.consumer_elapsed_seconds = summarize_numeric_values(consumer_elapsed_seconds);
   summary.elapsed_seconds = summarize_numeric_values(elapsed_seconds);
+  summary.producer_events_per_second = summarize_numeric_values(producer_events_per_second);
+  summary.consumer_events_per_second = summarize_numeric_values(consumer_events_per_second);
   summary.events_per_second = summarize_numeric_values(events_per_second);
   summary.arbitrage_detections = summarize_numeric_values(arbitrage_detections);
   summary.avg_queue_depth = summarize_numeric_values(avg_queue_depth);
@@ -274,8 +291,24 @@ bool write_benchmark_report_json(
   write_numeric_summary(output, aggregate.events_processed, 0);
   output << ",\n";
   write_indent(output, 2);
+  output << "\"producer_elapsed_seconds\": ";
+  write_numeric_summary(output, aggregate.producer_elapsed_seconds, 0);
+  output << ",\n";
+  write_indent(output, 2);
+  output << "\"consumer_elapsed_seconds\": ";
+  write_numeric_summary(output, aggregate.consumer_elapsed_seconds, 0);
+  output << ",\n";
+  write_indent(output, 2);
   output << "\"elapsed_seconds\": ";
   write_numeric_summary(output, aggregate.elapsed_seconds, 0);
+  output << ",\n";
+  write_indent(output, 2);
+  output << "\"producer_events_per_second\": ";
+  write_numeric_summary(output, aggregate.producer_events_per_second, 0);
+  output << ",\n";
+  write_indent(output, 2);
+  output << "\"consumer_events_per_second\": ";
+  write_numeric_summary(output, aggregate.consumer_events_per_second, 0);
   output << ",\n";
   write_indent(output, 2);
   output << "\"events_per_second\": ";
@@ -321,7 +354,15 @@ bool write_benchmark_report_json(
     write_indent(output, 3);
     output << "\"events_processed\": " << run.summary.events_processed << ",\n";
     write_indent(output, 3);
+    output << "\"producer_elapsed_seconds\": " << run.summary.producer_elapsed_seconds << ",\n";
+    write_indent(output, 3);
+    output << "\"consumer_elapsed_seconds\": " << run.summary.consumer_elapsed_seconds << ",\n";
+    write_indent(output, 3);
     output << "\"elapsed_seconds\": " << run.summary.elapsed_seconds << ",\n";
+    write_indent(output, 3);
+    output << "\"producer_events_per_second\": " << run.summary.producer_events_per_second << ",\n";
+    write_indent(output, 3);
+    output << "\"consumer_events_per_second\": " << run.summary.consumer_events_per_second << ",\n";
     write_indent(output, 3);
     output << "\"events_per_second\": " << run.events_per_second << ",\n";
     write_indent(output, 3);

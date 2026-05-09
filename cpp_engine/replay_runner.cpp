@@ -257,7 +257,10 @@ RunSummary ReplayRunner::run() const {
   std::string producer_error_message;
   std::string consumer_error_message;
   BenchmarkSamples benchmark_samples;
-  std::optional<std::chrono::steady_clock::time_point> measured_start_time;
+  std::optional<std::chrono::steady_clock::time_point> producer_measured_start_time;
+  std::optional<std::chrono::steady_clock::time_point> producer_measured_end_time;
+  std::optional<std::chrono::steady_clock::time_point> consumer_measured_start_time;
+  std::optional<std::chrono::steady_clock::time_point> consumer_measured_end_time;
   const std::size_t measured_event_count_hint =
       replay_adapter->metadata().event_count > config_.warmup_events
           ? replay_adapter->metadata().event_count - config_.warmup_events
@@ -281,18 +284,24 @@ RunSummary ReplayRunner::run() const {
 
       replay_clock->before_event(previous_event, event);
       ++sequence_number;
+      const bool measured_event = is_measured_event(sequence_number, config_.warmup_events);
 
       const std::uint64_t adapter_latency_ns = static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(adapter_end - adapter_start).count());
-      const auto enqueue_time = std::chrono::steady_clock::now();
+      const auto enqueue_start_time = std::chrono::steady_clock::now();
+      if (measured_event && !producer_measured_start_time.has_value()) {
+        producer_measured_start_time = enqueue_start_time;
+      }
 
       event_queue.enqueue(ReplayMessage::from_event(
           event,
           sequence_number,
           adapter_latency_ns,
-          enqueue_time));
+          enqueue_start_time));
+      const auto enqueue_end_time = std::chrono::steady_clock::now();
 
-      if (is_measured_event(sequence_number, config_.warmup_events)) {
+      if (measured_event) {
+        producer_measured_end_time = enqueue_end_time;
         const std::size_t measured_enqueue_index = sequence_number - config_.warmup_events;
         const std::size_t depth = event_queue.size_approx();
         benchmark_samples.queue_depth_samples.push_back(depth);
@@ -346,8 +355,8 @@ RunSummary ReplayRunner::run() const {
       }
 
       const auto logic_start = std::chrono::steady_clock::now();
-      if (measured_event && !measured_start_time.has_value()) {
-        measured_start_time = logic_start;
+      if (measured_event && !consumer_measured_start_time.has_value()) {
+        consumer_measured_start_time = logic_start;
       }
 
       const auto apply_start = logic_start;
@@ -409,6 +418,7 @@ RunSummary ReplayRunner::run() const {
       }
 
       const auto logic_end = std::chrono::steady_clock::now();
+      consumer_measured_end_time = logic_end;
       benchmark_samples.logic_latency_ns.push_back(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(logic_end - logic_start).count()));
     }
@@ -438,10 +448,24 @@ RunSummary ReplayRunner::run() const {
     return summary;
   }
 
-  const auto end_time = std::chrono::steady_clock::now();
-  if (measured_start_time.has_value()) {
-    summary.elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(
-        end_time - measured_start_time.value()).count();
+  if (producer_measured_start_time.has_value() && producer_measured_end_time.has_value()) {
+    summary.producer_elapsed_seconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(
+            producer_measured_end_time.value() - producer_measured_start_time.value()).count();
+  }
+  if (consumer_measured_start_time.has_value() && consumer_measured_end_time.has_value()) {
+    summary.consumer_elapsed_seconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(
+            consumer_measured_end_time.value() - consumer_measured_start_time.value()).count();
+  }
+  summary.elapsed_seconds = summary.consumer_elapsed_seconds;
+  if (summary.producer_elapsed_seconds > 0.0) {
+    summary.producer_events_per_second =
+        static_cast<double>(summary.events_processed) / summary.producer_elapsed_seconds;
+  }
+  if (summary.consumer_elapsed_seconds > 0.0) {
+    summary.consumer_events_per_second =
+        static_cast<double>(summary.events_processed) / summary.consumer_elapsed_seconds;
   }
   if (!benchmark_samples.queue_depth_samples.empty()) {
     const std::size_t final_measured_index = benchmark_samples.queue_depth_samples.size();
