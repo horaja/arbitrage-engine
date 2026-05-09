@@ -7,6 +7,8 @@
 #include <optional>
 #include <cstdint>
 
+#include "market_event.h"
+
 /**
  * @class ArbitrageGraph
  * @brief Represents the cryptocurrency market as a graph to find arbitrage opportunities.
@@ -25,11 +27,14 @@ public:
   ArbitrageGraph(const std::vector<std::string>& symbols);
 
   /**
-   * @brief Updates an edge's weight based on a new price tick.
-   * @param symbol The trading pair with a new price.
-   * @param price The new market price.
+   * @brief Updates both directional edges from an executable top-of-book quote.
+   * @param symbol The trading pair (e.g. "BTC-USD").
+   * @param quote The current best bid/ask with sizes.
+   *
+   * Forward edge BASE->QUOTE uses the bid (selling base for quote).
+   * Reverse edge QUOTE->BASE uses 1/ask (buying base with quote).
    */
-  void update_price(const std::string& symbol, double price);
+  void update_quote(const std::string& symbol, const TopOfBookQuote& quote);
 
   /**
    * @brief Detects and returns an arbitrage cycle if one exists.

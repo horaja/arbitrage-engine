@@ -118,26 +118,24 @@ ArbitrageGraph::ArbitrageGraph(const std::vector<std::string>& symbols) {
 }
 
 /**
- * @brief Updates the graph with a new price tick.
- * 
- * This function is called every time a new trade occurs in the market. It updates the
- * weights of the two corresponding edges in the graph (e.g., BTC -> USD and USD -> BTC)
- * and marks the affected vertices as "dirty", so that the `find_arbitrage_cycle`
- * function knows to re-evaluate them.
- * 
- * @param symbol The trading pair that has a new price (e.g., "BTC-USD").
- * @param price The new price for the trading pair.
+ * @brief Updates both directional edges of a pair from an executable top-of-book quote.
+ *
+ * For pair "BASE-QUOTE":
+ *   forward (BASE -> QUOTE): selling base for quote at the bid -> weight = -log(bid)
+ *   reverse (QUOTE -> BASE): buying base with quote at the ask -> weight = -log(1/ask) = log(ask)
+ *
+ * @param symbol The trading pair that has a new quote (e.g., "BTC-USD").
+ * @param quote The latest valid top-of-book quote for the symbol.
  */
-void ArbitrageGraph::update_price(const std::string& symbol, double price) {
+void ArbitrageGraph::update_quote(const std::string& symbol, const TopOfBookQuote& quote) {
 
-  /* Get Ids of input symbols */
   size_t delimiter_pos = symbol.find('-');
   if (delimiter_pos == std::string::npos) {
     throw std::runtime_error("Invalid symbol format. Expected 'BASE-QUOTE', but received: '" + symbol + "'");
   }
 
   std::string base_currency = symbol.substr(0, delimiter_pos);
-  std::string quote_currency = symbol.substr(delimiter_pos+1);
+  std::string quote_currency = symbol.substr(delimiter_pos + 1);
 
   auto const base_iter = currency_to_id.find(base_currency);
   auto const quote_iter = currency_to_id.find(quote_currency);
@@ -150,26 +148,17 @@ void ArbitrageGraph::update_price(const std::string& symbol, double price) {
   int base_id = base_iter->second;
   int quote_id = quote_iter->second;
 
+  double forward_weight = -std::log(quote.bid_price);
+  double reverse_weight = std::log(quote.ask_price);
 
-  /** 
-   * TODO: KEY OPTIMIZATION REQUIRED
-   * 
-   * Instead of injesting "last traded price", ingest L1 order book data (best bid and best ask)
-   * Reverse weight is its own argument, not calculated off of inputted price.
-   */
-  double weight = -log(price);
-  double reverse_weight = -log(1.0 / price);
-
-  /* Update Forward Edge */
   uint64_t forward_key = create_edge_key(base_id, quote_id);
   if (edge_index_map.find(forward_key) == edge_index_map.end()) {
-    adjacency_list[base_id].push_back({quote_id, weight});
+    adjacency_list[base_id].push_back({quote_id, forward_weight});
     edge_index_map[forward_key] = adjacency_list[base_id].size() - 1;
   } else {
-    adjacency_list[base_id][edge_index_map[forward_key]].weight = weight;
+    adjacency_list[base_id][edge_index_map[forward_key]].weight = forward_weight;
   }
 
-  /* Update Reverse Edge */
   uint64_t reverse_key = create_edge_key(quote_id, base_id);
   if (edge_index_map.find(reverse_key) == edge_index_map.end()) {
     adjacency_list[quote_id].push_back({base_id, reverse_weight});
@@ -178,10 +167,8 @@ void ArbitrageGraph::update_price(const std::string& symbol, double price) {
     adjacency_list[quote_id][edge_index_map[reverse_key]].weight = reverse_weight;
   }
 
-  /* Key SPFA Optimization */
   dirty_vertices.push_back(base_id);
   dirty_vertices.push_back(quote_id);
-
 }
 
 /**

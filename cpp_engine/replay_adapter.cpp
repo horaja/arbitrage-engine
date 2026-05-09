@@ -102,26 +102,37 @@ bool CsvReplayAdapter::parse_row(const std::string& line, MarketEvent& event, st
   std::stringstream row_stream(line);
   std::string timestamp_field;
   std::string symbol_field;
-  std::string price_field;
-  std::string quantity_field;
+  std::string bid_price_field;
+  std::string bid_size_field;
+  std::string ask_price_field;
+  std::string ask_size_field;
+  std::string trailing_field;
 
   if (!std::getline(row_stream, timestamp_field, ',') ||
       !std::getline(row_stream, symbol_field, ',') ||
-      !std::getline(row_stream, price_field, ',') ||
-      !std::getline(row_stream, quantity_field, ',')) {
+      !std::getline(row_stream, bid_price_field, ',') ||
+      !std::getline(row_stream, bid_size_field, ',') ||
+      !std::getline(row_stream, ask_price_field, ',') ||
+      !std::getline(row_stream, ask_size_field, ',')) {
     error_message = "Malformed CSV row: " + line;
+    return false;
+  }
+
+  if (std::getline(row_stream, trailing_field, ',')) {
+    error_message = "Malformed CSV row (extra columns): " + line;
     return false;
   }
 
   try {
     event.exchange_timestamp = trim(timestamp_field);
-    // Phase 1 CSV fixtures only carry exchange time, so receive time mirrors it.
     event.receive_timestamp = event.exchange_timestamp;
-    event.event_type = MarketEventType::TradeTick;
+    event.event_type = MarketEventType::TopOfBookQuote;
     event.symbol = trim(symbol_field);
-    event.trade_tick = TradeTick{
-        std::stod(trim(price_field)),
-        std::stod(trim(quantity_field)),
+    event.top_of_book = TopOfBookQuote{
+        std::stod(trim(bid_price_field)),
+        std::stod(trim(bid_size_field)),
+        std::stod(trim(ask_price_field)),
+        std::stod(trim(ask_size_field)),
     };
   } catch (const std::exception& exception) {
     error_message = "Failed to parse CSV row: " + line + " (" + exception.what() + ")";

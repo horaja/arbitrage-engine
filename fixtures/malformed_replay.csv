@@ -1,3 +1,3 @@
-timestamp,symbol,price,quantity
-2026-01-01T00:00:00Z,BTC-USD,50000,0.25
-2026-01-01T00:00:01Z,ETH-USD,not-a-number,1.00
+timestamp,symbol,bid_price,bid_size,ask_price,ask_size
+2026-01-01T00:00:00Z,BTC-USD,50000,1.0,50010,1.0
+2026-01-01T00:00:01Z,ETH-USD,not-a-number,10.0,2501,10.0

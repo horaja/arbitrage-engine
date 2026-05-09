@@ -1,0 +1,4 @@
+timestamp,symbol,bid_price,bid_size,ask_price,ask_size
+2026-01-01T00:00:00Z,BTC-ETH,20.0,2.0,20.1,2.0
+2026-01-01T00:00:01Z,ETH-LTC,10.0,40.0,10.1,40.0
+2026-01-01T00:00:02Z,LTC-BTC,0.0051,300.0,0.0052,300.0

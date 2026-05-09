@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(arb_core
   arbitragegraph.cpp
+  book_builder.cpp
   clock.cpp
   replay_adapter.cpp
   replay_runner.cpp

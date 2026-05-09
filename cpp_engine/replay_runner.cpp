@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -13,6 +15,7 @@
 #include <vector>
 
 #include "arbitragegraph.h"
+#include "book_builder.h"
 #include "replay_adapter.h"
 #include "spsc_queue.h"
 
@@ -78,14 +81,118 @@ void update_max_depth(std::atomic<std::size_t>& max_depth, std::size_t candidate
   }
 }
 
-double calculate_profit_percent(const ArbitrageGraph& graph, const std::vector<std::string>& cycle) {
-  double weight_sum = 0.0;
-  for (std::size_t index = 0; index + 1 < cycle.size(); ++index) {
-    weight_sum += graph.get_edge_weight(cycle[index], cycle[index + 1]);
+struct LegInfo {
+  double rate = 0.0;
+  double source_max = 0.0;
+};
+
+bool build_leg_lookup(
+    const BookBuilder& books,
+    const std::vector<std::string>& symbols,
+    std::map<std::pair<std::string, std::string>, LegInfo>& out) {
+  out.clear();
+  for (const auto& symbol : symbols) {
+    const auto delimiter_pos = symbol.find('-');
+    if (delimiter_pos == std::string::npos) {
+      return false;
+    }
+    const std::string base = symbol.substr(0, delimiter_pos);
+    const std::string quote = symbol.substr(delimiter_pos + 1);
+
+    const TopOfBookQuote* latest = books.latest(symbol);
+    if (latest == nullptr) {
+      continue;
+    }
+    out[{base, quote}] = LegInfo{latest->bid_price, latest->bid_size};
+    out[{quote, base}] = LegInfo{1.0 / latest->ask_price, latest->ask_size * latest->ask_price};
+  }
+  return true;
+}
+
+std::vector<std::string> rotate_cycle(const std::vector<std::string>& cycle) {
+  if (cycle.size() < 2) {
+    return cycle;
+  }
+  const std::size_t distinct = cycle.size() - 1;
+
+  std::size_t anchor_index = 0;
+  bool found_usd = false;
+  for (std::size_t i = 0; i < distinct; ++i) {
+    if (cycle[i] == "USD") {
+      anchor_index = i;
+      found_usd = true;
+      break;
+    }
   }
 
-  const double profit_multiplier = std::exp(-weight_sum);
-  return (profit_multiplier - 1.0) * 100.0;
+  if (!found_usd) {
+    std::string canonical_anchor = cycle[0];
+    for (std::size_t i = 1; i < distinct; ++i) {
+      if (cycle[i] < canonical_anchor) {
+        canonical_anchor = cycle[i];
+        anchor_index = i;
+      }
+    }
+  }
+
+  std::vector<std::string> rotated;
+  rotated.reserve(cycle.size());
+  for (std::size_t k = 0; k < distinct; ++k) {
+    rotated.push_back(cycle[(anchor_index + k) % distinct]);
+  }
+  rotated.push_back(rotated.front());
+  return rotated;
+}
+
+bool compute_opportunity(
+    const std::vector<std::string>& raw_cycle,
+    const BookBuilder& books,
+    const std::vector<std::string>& symbols,
+    double fee_bps,
+    OpportunitySummary& out) {
+  if (raw_cycle.size() < 3) {
+    return false;
+  }
+
+  std::map<std::pair<std::string, std::string>, LegInfo> leg_lookup;
+  if (!build_leg_lookup(books, symbols, leg_lookup)) {
+    return false;
+  }
+
+  const std::vector<std::string> cycle = rotate_cycle(raw_cycle);
+  const double leg_fee_factor = 1.0 - fee_bps / 10000.0;
+
+  double cumulative_source_per_anchor = 1.0;
+  double gross_multiplier = 1.0;
+  double net_multiplier = 1.0;
+  double max_anchor = std::numeric_limits<double>::infinity();
+
+  for (std::size_t i = 0; i + 1 < cycle.size(); ++i) {
+    const auto iter = leg_lookup.find({cycle[i], cycle[i + 1]});
+    if (iter == leg_lookup.end()) {
+      return false;
+    }
+    const LegInfo& leg = iter->second;
+    if (leg.source_max <= 0.0 || cumulative_source_per_anchor <= 0.0) {
+      return false;
+    }
+
+    const double anchor_cap_for_leg = leg.source_max / cumulative_source_per_anchor;
+    if (anchor_cap_for_leg < max_anchor) {
+      max_anchor = anchor_cap_for_leg;
+    }
+
+    gross_multiplier *= leg.rate;
+    net_multiplier *= leg.rate * leg_fee_factor;
+    cumulative_source_per_anchor *= leg.rate;
+  }
+
+  out.cycle = cycle;
+  out.gross_profit_percent = (gross_multiplier - 1.0) * 100.0;
+  out.net_profit_percent = (net_multiplier - 1.0) * 100.0;
+  out.max_executable_size = max_anchor;
+  out.anchor_currency = cycle.front();
+  return true;
 }
 
 void print_opportunity(const OpportunitySummary& opportunity) {
@@ -97,7 +204,11 @@ void print_opportunity(const OpportunitySummary& opportunity) {
       std::cout << " -> ";
     }
   }
-  std::cout << "\nProfit: " << opportunity.profit_percent << "%\n" << std::endl;
+  std::cout << "\nGross: " << opportunity.gross_profit_percent << "%"
+            << "  Net: " << opportunity.net_profit_percent << "%"
+            << "  MaxSize(" << opportunity.anchor_currency << "): "
+            << opportunity.max_executable_size << "\n"
+            << std::endl;
 }
 
 std::unique_ptr<Clock> make_clock(const EngineConfig& config) {
@@ -112,16 +223,16 @@ std::unique_ptr<ReplayAdapter> make_replay_adapter(const EngineConfig& config) {
   return std::make_unique<CsvReplayAdapter>(config.input_path);
 }
 
-bool extract_trade_tick(
+bool extract_top_of_book(
     const MarketEvent& event,
-    TradeTick& trade_tick,
+    TopOfBookQuote& quote,
     std::string& error_message) {
-  if (event.event_type != MarketEventType::TradeTick || !event.trade_tick.has_value()) {
+  if (event.event_type != MarketEventType::TopOfBookQuote || !event.top_of_book.has_value()) {
     error_message = "Unsupported market event payload for symbol: " + event.symbol;
     return false;
   }
 
-  trade_tick = event.trade_tick.value();
+  quote = event.top_of_book.value();
   return true;
 }
 
@@ -144,7 +255,9 @@ RunSummary ReplayRunner::run() const {
     return summary;
   }
 
-  ArbitrageGraph graph(replay_adapter->metadata().symbols);
+  const std::vector<std::string> symbols = replay_adapter->metadata().symbols;
+  ArbitrageGraph graph(symbols);
+  BookBuilder books;
   SPSCQueue<ReplayMessage> event_queue;
   std::unique_ptr<Clock> replay_clock = make_clock(config_);
 
@@ -187,9 +300,9 @@ RunSummary ReplayRunner::run() const {
         break;
       }
 
-      TradeTick trade_tick;
+      TopOfBookQuote quote;
       std::string payload_error;
-      if (!extract_trade_tick(message.event, trade_tick, payload_error)) {
+      if (!extract_top_of_book(message.event, quote, payload_error)) {
         {
           std::lock_guard<std::mutex> lock(error_mutex);
           consumer_error_message = payload_error;
@@ -198,27 +311,32 @@ RunSummary ReplayRunner::run() const {
         continue;
       }
 
+      ++summary.events_processed;
+
+      if (!books.apply_quote(message.event.symbol, quote)) {
+        continue;
+      }
+
       const auto logic_start = std::chrono::steady_clock::now();
-      graph.update_price(message.event.symbol, trade_tick.price);
+      graph.update_quote(message.event.symbol, quote);
       const auto cycle = graph.find_arbitrage_cycle();
       const auto logic_end = std::chrono::steady_clock::now();
 
       logic_latencies_ns.push_back(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(logic_end - logic_start).count()));
-      ++summary.events_processed;
 
       if (!cycle) {
         continue;
       }
 
-      const double profit_percent = calculate_profit_percent(graph, cycle.value());
-      if (profit_percent <= 0.0) {
+      OpportunitySummary opportunity;
+      if (!compute_opportunity(cycle.value(), books, symbols, config_.fee_bps, opportunity)) {
         continue;
       }
 
-      OpportunitySummary opportunity;
-      opportunity.cycle = cycle.value();
-      opportunity.profit_percent = profit_percent;
+      if (opportunity.gross_profit_percent <= 0.0) {
+        continue;
+      }
 
       ++summary.arbitrage_detections;
       summary.last_opportunity = opportunity;

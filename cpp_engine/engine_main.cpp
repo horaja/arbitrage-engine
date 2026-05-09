@@ -6,7 +6,7 @@
 namespace {
 
 void print_usage() {
-  std::cout << "Usage: arb_engine --input <csv-path> [--sleep-ms <n>] [--quiet]\n";
+  std::cout << "Usage: arb_engine --input <csv-path> [--sleep-ms <n>] [--fee-bps <n>] [--quiet]\n";
 }
 
 bool parse_non_negative_int(const std::string& value, int& parsed_value) {
@@ -17,6 +17,16 @@ bool parse_non_negative_int(const std::string& value, int& parsed_value) {
   }
 
   return parsed_value >= 0;
+}
+
+bool parse_non_negative_double(const std::string& value, double& parsed_value) {
+  try {
+    parsed_value = std::stod(value);
+  } catch (const std::exception&) {
+    return false;
+  }
+
+  return parsed_value >= 0.0;
 }
 
 }  // namespace
@@ -50,6 +60,15 @@ int main(int argc, char* argv[]) {
       }
       if (config.replay_delay_ms > 0) {
         config.clock_mode = ClockMode::WallTime;
+      }
+      continue;
+    }
+
+    if (argument == "--fee-bps" && index + 1 < argc) {
+      if (!parse_non_negative_double(argv[++index], config.fee_bps)) {
+        std::cerr << "Invalid value for --fee-bps.\n";
+        print_usage();
+        return 1;
       }
       continue;
     }

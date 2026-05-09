@@ -11,7 +11,10 @@
 
 struct OpportunitySummary {
   std::vector<std::string> cycle;
-  double profit_percent = 0.0;
+  double gross_profit_percent = 0.0;
+  double net_profit_percent = 0.0;
+  double max_executable_size = 0.0;
+  std::string anchor_currency;
 };
 
 struct LatencySummary {
@@ -28,6 +31,7 @@ struct EngineConfig {
   int replay_delay_ms = 0;
   ClockMode clock_mode = ClockMode::ReplayTime;
   bool quiet = false;
+  double fee_bps = 0.0;
 };
 
 struct RunSummary {
