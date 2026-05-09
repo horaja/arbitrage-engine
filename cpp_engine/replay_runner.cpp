@@ -325,7 +325,7 @@ RunSummary ReplayRunner::run() const {
       if (measured_event) {
         ++summary.events_processed;
         benchmark_samples.stage_latencies.adapter_next_event_ns.push_back(message.adapter_next_event_ns);
-        benchmark_samples.stage_latencies.queue_residence_latency_ns.push_back(static_cast<std::uint64_t>(
+        benchmark_samples.stage_latencies.pipeline_backlog_latency_ns.push_back(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(dequeue_time - message.enqueue_time).count()));
       }
 

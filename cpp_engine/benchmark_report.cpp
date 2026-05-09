@@ -116,8 +116,8 @@ void write_stage_latency_summary(
   write_latency_summary(output, summary.opportunity_compute, 0);
   output << ",\n";
   write_indent(output, indent_level + 1);
-  output << "\"queue_residence_latency\": ";
-  write_latency_summary(output, summary.queue_residence_latency, 0);
+  output << "\"pipeline_backlog_latency\": ";
+  write_latency_summary(output, summary.pipeline_backlog_latency, 0);
   output << "\n";
   write_indent(output, indent_level);
   output << "}";

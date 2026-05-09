@@ -18,7 +18,7 @@ struct StageLatencySummary {
   LatencySummary graph_update_quote;
   LatencySummary cycle_detection;
   LatencySummary opportunity_compute;
-  LatencySummary queue_residence_latency;
+  LatencySummary pipeline_backlog_latency;
 };
 
 struct StageLatencySamples {
@@ -27,7 +27,7 @@ struct StageLatencySamples {
   std::vector<std::uint64_t> graph_update_quote_ns;
   std::vector<std::uint64_t> cycle_detection_ns;
   std::vector<std::uint64_t> opportunity_compute_ns;
-  std::vector<std::uint64_t> queue_residence_latency_ns;
+  std::vector<std::uint64_t> pipeline_backlog_latency_ns;
 };
 
 struct BenchmarkSamples {

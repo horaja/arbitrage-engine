@@ -41,6 +41,13 @@ def load_reports(paths: list[Path]) -> list[dict]:
     return reports
 
 
+def backlog_latency_summary(report: dict) -> dict:
+    stage_latencies = report["aggregate"]["stage_latencies"]
+    if "pipeline_backlog_latency" in stage_latencies:
+        return stage_latencies["pipeline_backlog_latency"]
+    return stage_latencies["queue_residence_latency"]
+
+
 def stage_avg_ns(report: dict) -> tuple[list[str], list[float]]:
     stage_latencies = report["aggregate"]["stage_latencies"]
     names = [
@@ -49,7 +56,6 @@ def stage_avg_ns(report: dict) -> tuple[list[str], list[float]]:
         "graph_update_quote",
         "cycle_detection",
         "opportunity_compute",
-        "queue_residence_latency",
     ]
     values = [stage_latencies[name]["avg_ns"] for name in names]
     return names, values
@@ -64,6 +70,19 @@ def plot_stage_latency_bar(report: dict, output_dir: Path) -> None:
     plt.xticks(rotation=30, ha="right")
     plt.tight_layout()
     plt.savefig(output_dir / "stage_latency_bar.png")
+    plt.close()
+
+
+def plot_pipeline_backlog_latency(report: dict, output_dir: Path) -> None:
+    backlog = backlog_latency_summary(report)
+    labels = ["p50", "p95", "p99"]
+    values = [backlog["p50_ns"], backlog["p95_ns"], backlog["p99_ns"]]
+    plt.figure(figsize=(6, 4))
+    plt.bar(labels, values, color="#9467bd")
+    plt.ylabel("Latency (ns)")
+    plt.title("Pipeline Backlog Latency Percentiles")
+    plt.tight_layout()
+    plt.savefig(output_dir / "pipeline_backlog_latency.png")
     plt.close()
 
 
@@ -116,6 +135,7 @@ def plot_throughput_by_symbol_count(reports: list[dict], output_dir: Path) -> No
     plt.xlabel("Symbol count")
     plt.ylabel("Mean events/sec")
     plt.title("Throughput by Symbol Count")
+    plt.xscale("log")
     plt.tight_layout()
     plt.savefig(output_dir / "throughput_by_symbol_count.png")
     plt.close()
@@ -135,6 +155,7 @@ def main() -> int:
 
         first_report = reports[0]
         plot_stage_latency_bar(first_report, output_dir)
+        plot_pipeline_backlog_latency(first_report, output_dir)
         plot_latency_percentiles(first_report, output_dir)
         plot_queue_depth_summary(first_report, output_dir)
         plot_throughput_by_symbol_count(reports, output_dir)

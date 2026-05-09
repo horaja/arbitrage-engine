@@ -71,7 +71,7 @@ int main() {
     all_passed &= require(summary.arbitrage_detections == 0, "sample replay has realistic spreads and should detect no arbitrage");
     all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 6, "sample replay should record logic latency for every measured event");
     all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 6, "sample replay should record adapter timing for every measured event");
-    all_passed &= require(summary.benchmark_samples.stage_latencies.queue_residence_latency_ns.size() == 6, "sample replay should record queue residence latency for every measured event");
+    all_passed &= require(summary.benchmark_samples.stage_latencies.pipeline_backlog_latency_ns.size() == 6, "sample replay should record pipeline backlog latency for every measured event");
   }
 
   {

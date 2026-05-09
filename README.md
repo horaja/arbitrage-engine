@@ -26,7 +26,7 @@ This repository is a replay-driven triangular arbitrage prototype with a C++ hot
 - `ArbitrageGraph` is updated from executable bid/ask: forward edge `BASE -> QUOTE` uses the bid; reverse edge `QUOTE -> BASE` uses `1/ask`. Invalid or unrelated symbols do not block evaluation for a valid triangle.
 - Detected opportunities report `gross_profit_percent`, `net_profit_percent` (after applying `fee_bps` per leg multiplicatively), and `max_executable_size` in the anchor currency (USD when present in the cycle, otherwise the lexicographically earliest cycle currency).
 - `Clock` controls replay timing. Benchmark mode uses deterministic logical replay; the main binary can also run with a fixed per-event delay via `--sleep-ms`.
-- Benchmark metrics now include end-to-end measured logic latency plus stage timing for adapter reads, book updates, graph updates, cycle detection, opportunity computation, and queue residence time.
+- Benchmark metrics now include end-to-end measured logic latency plus stage timing for adapter reads, book updates, graph updates, cycle detection, opportunity computation, and pipeline backlog latency.
 
 ## Build
 
@@ -111,6 +111,10 @@ python3 tools/plot_benchmark.py benchmark.json --output-dir benchmark_plots
 ```
 
 `tools/plot_benchmark.py` requires `matplotlib`.
+
+Current benchmark note:
+
+- `max_queue_depth` can saturate at `4096`, which is the current `SPSCQueue` capacity in [spsc_queue.h](/Users/husain/Documents/cmu/projects/arbitrage-engine/cpp_engine/libs/spsc_queue.h:48). In throughput-heavy runs this means the producer is fully flooding the queue and spinning on capacity, which is useful as a stress signal but not yet a tuned steady-state design.
 
 ## Optional Python Logger
 

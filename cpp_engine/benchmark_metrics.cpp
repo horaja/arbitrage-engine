@@ -54,7 +54,7 @@ StageLatencySummary summarize_stage_latencies(const StageLatencySamples& samples
   summary.graph_update_quote = summarize_latencies(samples.graph_update_quote_ns);
   summary.cycle_detection = summarize_latencies(samples.cycle_detection_ns);
   summary.opportunity_compute = summarize_latencies(samples.opportunity_compute_ns);
-  summary.queue_residence_latency = summarize_latencies(samples.queue_residence_latency_ns);
+  summary.pipeline_backlog_latency = summarize_latencies(samples.pipeline_backlog_latency_ns);
   return summary;
 }
 
@@ -76,6 +76,6 @@ void append_benchmark_samples(BenchmarkSamples& destination, BenchmarkSamples&& 
       destination.stage_latencies.opportunity_compute_ns,
       source.stage_latencies.opportunity_compute_ns);
   append_latency_vector(
-      destination.stage_latencies.queue_residence_latency_ns,
-      source.stage_latencies.queue_residence_latency_ns);
+      destination.stage_latencies.pipeline_backlog_latency_ns,
+      source.stage_latencies.pipeline_backlog_latency_ns);
 }
