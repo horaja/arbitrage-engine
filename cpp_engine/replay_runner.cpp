@@ -1,5 +1,6 @@
 #include "replay_runner.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -220,6 +221,10 @@ bool is_measured_event(std::size_t sequence_number, std::size_t warmup_events) {
   return sequence_number > warmup_events;
 }
 
+std::size_t queue_depth_series_stride(std::size_t measured_event_count_hint) {
+  return measured_event_count_hint <= 100000 ? 100 : 1000;
+}
+
 }  // namespace
 
 ReplayRunner::ReplayRunner(EngineConfig config) : config_(std::move(config)) {}
@@ -253,6 +258,11 @@ RunSummary ReplayRunner::run() const {
   std::string consumer_error_message;
   BenchmarkSamples benchmark_samples;
   std::optional<std::chrono::steady_clock::time_point> measured_start_time;
+  const std::size_t measured_event_count_hint =
+      replay_adapter->metadata().event_count > config_.warmup_events
+          ? replay_adapter->metadata().event_count - config_.warmup_events
+          : 0;
+  const std::size_t depth_series_stride = queue_depth_series_stride(measured_event_count_hint);
 
   std::thread replay_thread([&]() {
     std::optional<MarketEvent> previous_event;
@@ -283,7 +293,13 @@ RunSummary ReplayRunner::run() const {
           enqueue_time));
 
       if (is_measured_event(sequence_number, config_.warmup_events)) {
-        update_max_depth(max_queue_depth, event_queue.size_approx());
+        const std::size_t measured_enqueue_index = sequence_number - config_.warmup_events;
+        const std::size_t depth = event_queue.size_approx();
+        benchmark_samples.queue_depth_samples.push_back(depth);
+        update_max_depth(max_queue_depth, depth);
+        if ((measured_enqueue_index - 1) % depth_series_stride == 0) {
+          benchmark_samples.queue_depth_series.push_back({measured_enqueue_index, depth});
+        }
       }
 
       previous_event = event;
@@ -427,7 +443,17 @@ RunSummary ReplayRunner::run() const {
     summary.elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(
         end_time - measured_start_time.value()).count();
   }
+  if (!benchmark_samples.queue_depth_samples.empty()) {
+    const std::size_t final_measured_index = benchmark_samples.queue_depth_samples.size();
+    const std::size_t final_depth = benchmark_samples.queue_depth_samples.back();
+    if (benchmark_samples.queue_depth_series.empty() ||
+        benchmark_samples.queue_depth_series.back().event_index != final_measured_index) {
+      benchmark_samples.queue_depth_series.push_back({final_measured_index, final_depth});
+    }
+  }
   summary.max_queue_depth = max_queue_depth.load(std::memory_order_relaxed);
+  summary.queue_depth = summarize_queue_depths(benchmark_samples.queue_depth_samples);
+  summary.max_queue_depth = summary.queue_depth.max_depth;
   summary.logic_latency = summarize_latencies(benchmark_samples.logic_latency_ns);
   summary.stage_latencies = summarize_stage_latencies(benchmark_samples.stage_latencies);
   summary.benchmark_samples = std::move(benchmark_samples);

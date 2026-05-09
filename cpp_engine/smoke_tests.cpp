@@ -72,6 +72,11 @@ int main() {
     all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 6, "sample replay should record logic latency for every measured event");
     all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 6, "sample replay should record adapter timing for every measured event");
     all_passed &= require(summary.benchmark_samples.stage_latencies.pipeline_backlog_latency_ns.size() == 6, "sample replay should record pipeline backlog latency for every measured event");
+    all_passed &= require(!summary.benchmark_samples.queue_depth_samples.empty(), "sample replay should record queue depth samples");
+    all_passed &= require(summary.queue_depth.p95_depth <= summary.max_queue_depth, "sample replay p95 queue depth should not exceed max depth");
+    all_passed &= require(summary.queue_depth.avg_depth <= static_cast<double>(summary.max_queue_depth), "sample replay avg queue depth should not exceed max depth");
+    all_passed &= require(!summary.benchmark_samples.queue_depth_series.empty(), "sample replay should record queue depth series points");
+    all_passed &= require(summary.benchmark_samples.queue_depth_series.back().event_index == summary.events_processed, "queue depth series should include the final measured event");
   }
 
   {
@@ -87,6 +92,9 @@ int main() {
     all_passed &= require(summary.events_processed == 4, "warmup replay should only measure post-warmup events");
     all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 4, "warmup replay should only retain measured logic samples");
     all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 4, "warmup replay should only retain measured adapter samples");
+    all_passed &= require(!summary.benchmark_samples.queue_depth_series.empty(), "warmup replay should still record queue depth series points");
+    all_passed &= require(summary.benchmark_samples.queue_depth_series.front().event_index >= 1, "queue depth series should use measured event indexes");
+    all_passed &= require(summary.benchmark_samples.queue_depth_series.back().event_index == summary.events_processed, "warmup replay queue depth series should end at the measured event count");
   }
 
   {

@@ -139,6 +139,31 @@ void write_numeric_summary(
   output << "}";
 }
 
+void write_queue_depth_series(
+    std::ostream& output,
+    const std::vector<QueueDepthPoint>& series,
+    int indent_level) {
+  write_indent(output, indent_level);
+  output << "[\n";
+  for (std::size_t index = 0; index < series.size(); ++index) {
+    const auto& point = series[index];
+    write_indent(output, indent_level + 1);
+    output << "{\n";
+    write_indent(output, indent_level + 2);
+    output << "\"event_index\": " << point.event_index << ",\n";
+    write_indent(output, indent_level + 2);
+    output << "\"depth\": " << point.depth << "\n";
+    write_indent(output, indent_level + 1);
+    output << "}";
+    if (index + 1 < series.size()) {
+      output << ",";
+    }
+    output << "\n";
+  }
+  write_indent(output, indent_level);
+  output << "]";
+}
+
 }  // namespace
 
 double compute_events_per_second(const RunSummary& summary) {
@@ -158,6 +183,8 @@ BenchmarkSummary summarize_benchmark_runs(
   std::vector<double> elapsed_seconds;
   std::vector<double> events_per_second;
   std::vector<double> arbitrage_detections;
+  std::vector<double> avg_queue_depth;
+  std::vector<double> p95_queue_depth;
   std::vector<double> max_queue_depth;
 
   total_events_seen.reserve(runs.size());
@@ -165,6 +192,8 @@ BenchmarkSummary summarize_benchmark_runs(
   elapsed_seconds.reserve(runs.size());
   events_per_second.reserve(runs.size());
   arbitrage_detections.reserve(runs.size());
+  avg_queue_depth.reserve(runs.size());
+  p95_queue_depth.reserve(runs.size());
   max_queue_depth.reserve(runs.size());
 
   for (const auto& run : runs) {
@@ -173,6 +202,8 @@ BenchmarkSummary summarize_benchmark_runs(
     elapsed_seconds.push_back(run.summary.elapsed_seconds);
     events_per_second.push_back(run.events_per_second);
     arbitrage_detections.push_back(static_cast<double>(run.summary.arbitrage_detections));
+    avg_queue_depth.push_back(run.summary.queue_depth.avg_depth);
+    p95_queue_depth.push_back(static_cast<double>(run.summary.queue_depth.p95_depth));
     max_queue_depth.push_back(static_cast<double>(run.summary.max_queue_depth));
   }
 
@@ -181,6 +212,8 @@ BenchmarkSummary summarize_benchmark_runs(
   summary.elapsed_seconds = summarize_numeric_values(elapsed_seconds);
   summary.events_per_second = summarize_numeric_values(events_per_second);
   summary.arbitrage_detections = summarize_numeric_values(arbitrage_detections);
+  summary.avg_queue_depth = summarize_numeric_values(avg_queue_depth);
+  summary.p95_queue_depth = summarize_numeric_values(p95_queue_depth);
   summary.max_queue_depth = summarize_numeric_values(max_queue_depth);
   summary.logic_latency = summarize_latencies(aggregate_samples.logic_latency_ns);
   summary.stage_latencies = summarize_stage_latencies(aggregate_samples.stage_latencies);
@@ -253,6 +286,14 @@ bool write_benchmark_report_json(
   write_numeric_summary(output, aggregate.arbitrage_detections, 0);
   output << ",\n";
   write_indent(output, 2);
+  output << "\"avg_queue_depth\": ";
+  write_numeric_summary(output, aggregate.avg_queue_depth, 0);
+  output << ",\n";
+  write_indent(output, 2);
+  output << "\"p95_queue_depth\": ";
+  write_numeric_summary(output, aggregate.p95_queue_depth, 0);
+  output << ",\n";
+  write_indent(output, 2);
   output << "\"max_queue_depth\": ";
   write_numeric_summary(output, aggregate.max_queue_depth, 0);
   output << ",\n";
@@ -286,6 +327,10 @@ bool write_benchmark_report_json(
     write_indent(output, 3);
     output << "\"arbitrage_detections\": " << run.summary.arbitrage_detections << ",\n";
     write_indent(output, 3);
+    output << "\"avg_queue_depth\": " << run.summary.queue_depth.avg_depth << ",\n";
+    write_indent(output, 3);
+    output << "\"p95_queue_depth\": " << run.summary.queue_depth.p95_depth << ",\n";
+    write_indent(output, 3);
     output << "\"max_queue_depth\": " << run.summary.max_queue_depth << ",\n";
     write_indent(output, 3);
     output << "\"logic_latency\": ";
@@ -294,6 +339,10 @@ bool write_benchmark_report_json(
     write_indent(output, 3);
     output << "\"stage_latencies\": ";
     write_stage_latency_summary(output, run.summary.stage_latencies, 0);
+    output << ",\n";
+    write_indent(output, 3);
+    output << "\"queue_depth_series\": ";
+    write_queue_depth_series(output, run.summary.benchmark_samples.queue_depth_series, 3);
     output << "\n";
     write_indent(output, 2);
     output << "}";

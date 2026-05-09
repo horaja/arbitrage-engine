@@ -102,14 +102,45 @@ def plot_latency_percentiles(report: dict, output_dir: Path) -> None:
 def plot_queue_depth_summary(report: dict, output_dir: Path) -> None:
     runs = report["runs"]
     labels = [str(run["run_index"]) for run in runs]
-    values = [run["max_queue_depth"] for run in runs]
-    plt.figure(figsize=(7, 4))
-    plt.bar(labels, values, color="#2ca02c")
+    avg_values = [run.get("avg_queue_depth", 0.0) for run in runs]
+    p95_values = [run.get("p95_queue_depth", run["max_queue_depth"]) for run in runs]
+    max_values = [run["max_queue_depth"] for run in runs]
+    x_positions = list(range(len(labels)))
+    width = 0.25
+
+    plt.figure(figsize=(8, 4))
+    plt.bar([x - width for x in x_positions], avg_values, width=width, color="#1f77b4", label="avg")
+    plt.bar(x_positions, p95_values, width=width, color="#ff7f0e", label="p95")
+    plt.bar([x + width for x in x_positions], max_values, width=width, color="#2ca02c", label="max")
     plt.xlabel("Run")
-    plt.ylabel("Max queue depth")
-    plt.title("Queue Depth by Run")
+    plt.ylabel("Queue depth")
+    plt.title("Queue Depth Summary by Run")
+    plt.xticks(x_positions, labels)
+    plt.legend()
     plt.tight_layout()
     plt.savefig(output_dir / "queue_depth_summary.png")
+    plt.close()
+
+
+def plot_queue_depth_over_event_index(report: dict, output_dir: Path) -> None:
+    runs = report["runs"]
+    if not runs:
+      return
+    series = runs[0].get("queue_depth_series", [])
+    if not series:
+      return
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(
+        [point["event_index"] for point in series],
+        [point["depth"] for point in series],
+        color="#17becf",
+    )
+    plt.xlabel("Measured enqueue event index")
+    plt.ylabel("Queue depth")
+    plt.title("Queue Depth Over Event Index")
+    plt.tight_layout()
+    plt.savefig(output_dir / "queue_depth_over_event_index.png")
     plt.close()
 
 
@@ -158,6 +189,7 @@ def main() -> int:
         plot_pipeline_backlog_latency(first_report, output_dir)
         plot_latency_percentiles(first_report, output_dir)
         plot_queue_depth_summary(first_report, output_dir)
+        plot_queue_depth_over_event_index(first_report, output_dir)
         plot_throughput_by_symbol_count(reports, output_dir)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         print(f"error: {error}")

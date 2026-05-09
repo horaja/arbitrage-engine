@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <utility>
 
 namespace {
@@ -9,6 +10,15 @@ namespace {
 void append_latency_vector(
     std::vector<std::uint64_t>& destination,
     std::vector<std::uint64_t>& source) {
+  destination.insert(
+      destination.end(),
+      std::make_move_iterator(source.begin()),
+      std::make_move_iterator(source.end()));
+  source.clear();
+}
+
+template<typename T>
+void append_value_vector(std::vector<T>& destination, std::vector<T>& source) {
   destination.insert(
       destination.end(),
       std::make_move_iterator(source.begin()),
@@ -55,6 +65,29 @@ StageLatencySummary summarize_stage_latencies(const StageLatencySamples& samples
   summary.cycle_detection = summarize_latencies(samples.cycle_detection_ns);
   summary.opportunity_compute = summarize_latencies(samples.opportunity_compute_ns);
   summary.pipeline_backlog_latency = summarize_latencies(samples.pipeline_backlog_latency_ns);
+  return summary;
+}
+
+QueueDepthSummary summarize_queue_depths(const std::vector<std::size_t>& queue_depths) {
+  QueueDepthSummary summary;
+  if (queue_depths.empty()) {
+    return summary;
+  }
+
+  std::vector<std::size_t> sorted_depths = queue_depths;
+  std::sort(sorted_depths.begin(), sorted_depths.end());
+
+  const std::size_t p95_index = static_cast<std::size_t>(
+      std::ceil(0.95 * static_cast<double>(sorted_depths.size())) - 1.0);
+
+  std::size_t total_depth = 0;
+  for (const std::size_t depth : sorted_depths) {
+    total_depth += depth;
+  }
+
+  summary.avg_depth = static_cast<double>(total_depth) / static_cast<double>(sorted_depths.size());
+  summary.p95_depth = sorted_depths[std::min(p95_index, sorted_depths.size() - 1)];
+  summary.max_depth = sorted_depths.back();
   return summary;
 }
 

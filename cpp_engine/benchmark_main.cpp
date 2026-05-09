@@ -43,6 +43,10 @@ void print_run_summary(const BenchmarkRunResult& run) {
             << run.summary.elapsed_seconds
             << " events_per_second=" << std::setprecision(2)
             << run.events_per_second
+            << " avg_queue_depth=" << std::fixed << std::setprecision(2)
+            << run.summary.queue_depth.avg_depth
+            << " p95_queue_depth=" << std::setprecision(0)
+            << static_cast<double>(run.summary.queue_depth.p95_depth)
             << " max_queue_depth=" << run.summary.max_queue_depth
             << " arbitrage_detections=" << run.summary.arbitrage_detections
             << "\n";
@@ -56,6 +60,8 @@ void print_aggregate_summary(const BenchmarkSummary& summary) {
   std::cout << "elapsed_seconds_mean: " << summary.elapsed_seconds.mean << "\n";
   std::cout << std::setprecision(2);
   std::cout << "events_per_second_mean: " << summary.events_per_second.mean << "\n";
+  std::cout << "avg_queue_depth_mean: " << summary.avg_queue_depth.mean << "\n";
+  std::cout << "p95_queue_depth_mean: " << summary.p95_queue_depth.mean << "\n";
   std::cout << "max_queue_depth_mean: " << summary.max_queue_depth.mean << "\n";
   std::cout << "max_queue_depth_max: " << summary.max_queue_depth.max << "\n";
   std::cout << "arbitrage_detections_mean: " << summary.arbitrage_detections.mean << "\n";

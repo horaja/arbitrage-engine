@@ -26,6 +26,8 @@ struct BenchmarkSummary {
   NumericSummary elapsed_seconds;
   NumericSummary events_per_second;
   NumericSummary arbitrage_detections;
+  NumericSummary avg_queue_depth;
+  NumericSummary p95_queue_depth;
   NumericSummary max_queue_depth;
   LatencySummary logic_latency;
   StageLatencySummary stage_latencies;
