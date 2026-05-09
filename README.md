@@ -15,16 +15,18 @@ This repository is a replay-driven triangular arbitrage prototype with a C++ hot
 - Graph-based arbitrage detection driven by executable bid/ask prices
 - Configurable global per-leg fee, with gross and net edge reporting
 - Top-of-book size cap reported in the cycle's anchor currency
-- Native smoke tests and a lightweight benchmark entrypoint
+- Native smoke tests and an extensible benchmark entrypoint
 
 ## Current Architecture
 
 - `CsvReplayAdapter` reads quote CSV files (`timestamp,symbol,bid_price,bid_size,ask_price,ask_size`) and emits typed `MarketEvent` records.
 - `ReplayRunner` consumes replay events through the adapter boundary and drives the two-thread pipeline.
+- Benchmark warmup is handled inside `ReplayRunner`, so benchmark runs can prime market state before the measured window begins.
 - `BookBuilder` validates each quote (positive sides, non-crossed) and stores the most recent valid top-of-book per symbol; invalid quotes never overwrite the last known good state.
-- `ArbitrageGraph` is updated from executable bid/ask: forward edge `BASE -> QUOTE` uses the bid; reverse edge `QUOTE -> BASE` uses `1/ask`. Cycles are only evaluated once every tracked symbol has at least one valid quote.
-- Detected opportunities report `gross_profit_percent`, `net_profit_percent` (after applying `fee_bps` per leg multiplicatively), and `max_executable_size` in the anchor currency (USD when present in the cycle, otherwise the first cycle vertex).
+- `ArbitrageGraph` is updated from executable bid/ask: forward edge `BASE -> QUOTE` uses the bid; reverse edge `QUOTE -> BASE` uses `1/ask`. Invalid or unrelated symbols do not block evaluation for a valid triangle.
+- Detected opportunities report `gross_profit_percent`, `net_profit_percent` (after applying `fee_bps` per leg multiplicatively), and `max_executable_size` in the anchor currency (USD when present in the cycle, otherwise the lexicographically earliest cycle currency).
 - `Clock` controls replay timing. Benchmark mode uses deterministic logical replay; the main binary can also run with a fixed per-event delay via `--sleep-ms`.
+- Benchmark metrics now include end-to-end measured logic latency plus stage timing for adapter reads, book updates, graph updates, cycle detection, opportunity computation, and queue residence time.
 
 ## Build
 
@@ -66,6 +68,16 @@ Run the benchmark:
 ./build/arb_benchmark --input fixtures/sample_replay.csv
 ```
 
+Repeat the benchmark, skip a warmup prefix, and write structured JSON output:
+
+```bash
+./build/arb_benchmark \
+  --input fixtures/sample_replay.csv \
+  --repeat 5 \
+  --warmup-events 2 \
+  --output-json benchmark.json
+```
+
 Run the smoke tests:
 
 ```bash
@@ -77,10 +89,28 @@ The smoke tests cover:
 - adapter metadata and typed quote-event parsing
 - `BookBuilder` validity rules (positive sides, non-crossed, last-valid retention)
 - deterministic replay success and regression fixtures
+- warmup-window accounting inside `ReplayRunner`
 - gross-vs-net behavior under a configured per-leg fee
 - size-capped opportunity reporting
 - malformed CSV failure handling
 - wall-time replay mode
+
+## Benchmark Tooling
+
+Generate deterministic benchmark datasets in the untracked `benchmark_data/` directory:
+
+```bash
+python3 tools/generate_replay.py --profile 10k_3
+python3 tools/generate_replay.py --profile 1m_30
+```
+
+Plot one or more benchmark JSON files:
+
+```bash
+python3 tools/plot_benchmark.py benchmark.json --output-dir benchmark_plots
+```
+
+`tools/plot_benchmark.py` requires `matplotlib`.
 
 ## Optional Python Logger
 

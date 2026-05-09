@@ -66,8 +66,27 @@ int main() {
 
     const RunSummary summary = ReplayRunner(config).run();
     all_passed &= require(summary.succeeded, "sample replay should succeed");
+    all_passed &= require(summary.total_events_seen == 6, "sample replay should see 6 total events");
     all_passed &= require(summary.events_processed == 6, "sample replay should process 6 events");
     all_passed &= require(summary.arbitrage_detections == 0, "sample replay has realistic spreads and should detect no arbitrage");
+    all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 6, "sample replay should record logic latency for every measured event");
+    all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 6, "sample replay should record adapter timing for every measured event");
+    all_passed &= require(summary.benchmark_samples.stage_latencies.queue_residence_latency_ns.size() == 6, "sample replay should record queue residence latency for every measured event");
+  }
+
+  {
+    EngineConfig config;
+    config.input_path = fixture_path("sample_replay.csv").string();
+    config.quiet = true;
+    config.replay_delay_ms = 0;
+    config.warmup_events = 2;
+
+    const RunSummary summary = ReplayRunner(config).run();
+    all_passed &= require(summary.succeeded, "warmup replay should succeed");
+    all_passed &= require(summary.total_events_seen == 6, "warmup replay should still see the full replay");
+    all_passed &= require(summary.events_processed == 4, "warmup replay should only measure post-warmup events");
+    all_passed &= require(summary.benchmark_samples.logic_latency_ns.size() == 4, "warmup replay should only retain measured logic samples");
+    all_passed &= require(summary.benchmark_samples.stage_latencies.adapter_next_event_ns.size() == 4, "warmup replay should only retain measured adapter samples");
   }
 
   {
@@ -80,6 +99,7 @@ int main() {
     all_passed &= require(summary.succeeded, "arb fixture should succeed");
     all_passed &= require(summary.arbitrage_detections >= 1, "arb fixture should detect arbitrage");
     all_passed &= require(summary.last_opportunity.has_value(), "arb fixture should expose an opportunity");
+    all_passed &= require(!summary.benchmark_samples.stage_latencies.opportunity_compute_ns.empty(), "arb fixture should record opportunity compute samples");
     if (summary.last_opportunity.has_value()) {
       const auto& opportunity = summary.last_opportunity.value();
       all_passed &= require(opportunity.gross_profit_percent > 0.0, "arb fixture gross profit should be positive");
@@ -188,6 +208,17 @@ int main() {
     const RunSummary summary = ReplayRunner(config).run();
     all_passed &= require(summary.succeeded, "wall-time replay should succeed");
     all_passed &= require(summary.events_processed == 6, "wall-time replay should still process 6 events");
+  }
+
+  {
+    EngineConfig config;
+    config.input_path = fixture_path("sample_replay.csv").string();
+    config.quiet = true;
+    config.warmup_events = 6;
+
+    const RunSummary summary = ReplayRunner(config).run();
+    all_passed &= require(!summary.succeeded, "warmup should fail when it consumes the entire replay");
+    all_passed &= require(!summary.error_message.empty(), "warmup failure should return an error message");
   }
 
   if (!all_passed) {

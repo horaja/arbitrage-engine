@@ -1,9 +1,7 @@
 #include "replay_runner.h"
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -28,11 +26,21 @@ struct ReplayMessage {
   };
 
   Kind kind = Kind::EndOfStream;
+  std::size_t sequence_number = 0;
+  std::uint64_t adapter_next_event_ns = 0;
+  std::chrono::steady_clock::time_point enqueue_time{};
   MarketEvent event;
 
-  static ReplayMessage from_event(MarketEvent market_event) {
+  static ReplayMessage from_event(
+      MarketEvent market_event,
+      std::size_t sequence_number,
+      std::uint64_t adapter_next_event_ns,
+      std::chrono::steady_clock::time_point enqueue_time) {
     ReplayMessage message;
     message.kind = Kind::MarketEvent;
+    message.sequence_number = sequence_number;
+    message.adapter_next_event_ns = adapter_next_event_ns;
+    message.enqueue_time = enqueue_time;
     message.event = std::move(market_event);
     return message;
   }
@@ -41,34 +49,6 @@ struct ReplayMessage {
     return ReplayMessage{};
   }
 };
-
-LatencySummary summarize_latencies(std::vector<std::uint64_t> latencies_ns) {
-  LatencySummary summary;
-  if (latencies_ns.empty()) {
-    return summary;
-  }
-
-  std::sort(latencies_ns.begin(), latencies_ns.end());
-
-  const auto percentile_value = [&](double percentile) {
-    const std::size_t index = static_cast<std::size_t>(
-        std::ceil(percentile * static_cast<double>(latencies_ns.size())) - 1.0);
-    return latencies_ns[std::min(index, latencies_ns.size() - 1)];
-  };
-
-  std::uint64_t total_ns = 0;
-  for (const std::uint64_t latency_ns : latencies_ns) {
-    total_ns += latency_ns;
-  }
-
-  summary.min_ns = latencies_ns.front();
-  summary.avg_ns = total_ns / latencies_ns.size();
-  summary.p50_ns = percentile_value(0.50);
-  summary.p95_ns = percentile_value(0.95);
-  summary.p99_ns = percentile_value(0.99);
-  summary.max_ns = latencies_ns.back();
-  return summary;
-}
 
 void update_max_depth(std::atomic<std::size_t>& max_depth, std::size_t candidate_depth) {
   std::size_t observed = max_depth.load(std::memory_order_relaxed);
@@ -236,6 +216,10 @@ bool extract_top_of_book(
   return true;
 }
 
+bool is_measured_event(std::size_t sequence_number, std::size_t warmup_events) {
+  return sequence_number > warmup_events;
+}
+
 }  // namespace
 
 ReplayRunner::ReplayRunner(EngineConfig config) : config_(std::move(config)) {}
@@ -267,18 +251,41 @@ RunSummary ReplayRunner::run() const {
   std::mutex error_mutex;
   std::string producer_error_message;
   std::string consumer_error_message;
-  std::vector<std::uint64_t> logic_latencies_ns;
-
-  const auto start_time = std::chrono::steady_clock::now();
+  BenchmarkSamples benchmark_samples;
+  std::optional<std::chrono::steady_clock::time_point> measured_start_time;
 
   std::thread replay_thread([&]() {
     std::optional<MarketEvent> previous_event;
     MarketEvent event;
     std::string parse_error;
-    while (replay_adapter->next_event(event, parse_error)) {
+    std::size_t sequence_number = 0;
+
+    while (true) {
+      const auto adapter_start = std::chrono::steady_clock::now();
+      const bool has_event = replay_adapter->next_event(event, parse_error);
+      const auto adapter_end = std::chrono::steady_clock::now();
+
+      if (!has_event) {
+        break;
+      }
+
       replay_clock->before_event(previous_event, event);
-      event_queue.enqueue(ReplayMessage::from_event(event));
-      update_max_depth(max_queue_depth, event_queue.size_approx());
+      ++sequence_number;
+
+      const std::uint64_t adapter_latency_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(adapter_end - adapter_start).count());
+      const auto enqueue_time = std::chrono::steady_clock::now();
+
+      event_queue.enqueue(ReplayMessage::from_event(
+          event,
+          sequence_number,
+          adapter_latency_ns,
+          enqueue_time));
+
+      if (is_measured_event(sequence_number, config_.warmup_events)) {
+        update_max_depth(max_queue_depth, event_queue.size_approx());
+      }
+
       previous_event = event;
     }
 
@@ -295,6 +302,7 @@ RunSummary ReplayRunner::run() const {
     while (true) {
       ReplayMessage message;
       event_queue.wait_dequeue(message);
+      const auto dequeue_time = std::chrono::steady_clock::now();
 
       if (message.kind == ReplayMessage::Kind::EndOfStream) {
         break;
@@ -311,50 +319,87 @@ RunSummary ReplayRunner::run() const {
         continue;
       }
 
-      ++summary.events_processed;
+      ++summary.total_events_seen;
+      const bool measured_event = is_measured_event(message.sequence_number, config_.warmup_events);
 
-      if (!books.apply_quote(message.event.symbol, quote)) {
-        continue;
+      if (measured_event) {
+        ++summary.events_processed;
+        benchmark_samples.stage_latencies.adapter_next_event_ns.push_back(message.adapter_next_event_ns);
+        benchmark_samples.stage_latencies.queue_residence_latency_ns.push_back(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(dequeue_time - message.enqueue_time).count()));
       }
 
       const auto logic_start = std::chrono::steady_clock::now();
+      if (measured_event && !measured_start_time.has_value()) {
+        measured_start_time = logic_start;
+      }
+
+      const auto apply_start = logic_start;
+      const bool quote_applied = books.apply_quote(message.event.symbol, quote);
+      const auto apply_end = std::chrono::steady_clock::now();
+
+      if (!measured_event) {
+        if (!quote_applied) {
+          continue;
+        }
+
+        graph.update_quote(message.event.symbol, quote);
+        (void)graph.find_arbitrage_cycle();
+        continue;
+      }
+
+      benchmark_samples.stage_latencies.book_apply_quote_ns.push_back(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(apply_end - apply_start).count()));
+
+      if (!quote_applied) {
+        benchmark_samples.logic_latency_ns.push_back(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(apply_end - logic_start).count()));
+        continue;
+      }
+
+      const auto graph_start = std::chrono::steady_clock::now();
       graph.update_quote(message.event.symbol, quote);
+      const auto graph_end = std::chrono::steady_clock::now();
+      benchmark_samples.stage_latencies.graph_update_quote_ns.push_back(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(graph_end - graph_start).count()));
+
+      const auto cycle_start = std::chrono::steady_clock::now();
       const auto cycle = graph.find_arbitrage_cycle();
+      const auto cycle_end = std::chrono::steady_clock::now();
+      benchmark_samples.stage_latencies.cycle_detection_ns.push_back(static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(cycle_end - cycle_start).count()));
+
+      if (cycle) {
+        const auto opportunity_start = std::chrono::steady_clock::now();
+        OpportunitySummary opportunity;
+        const bool computed = compute_opportunity(
+            cycle.value(),
+            books,
+            symbols,
+            config_.fee_bps,
+            opportunity);
+        const auto opportunity_end = std::chrono::steady_clock::now();
+        benchmark_samples.stage_latencies.opportunity_compute_ns.push_back(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(opportunity_end - opportunity_start).count()));
+
+        if (computed && opportunity.gross_profit_percent > 0.0) {
+          ++summary.arbitrage_detections;
+          summary.last_opportunity = opportunity;
+
+          if (!config_.quiet) {
+            print_opportunity(opportunity);
+          }
+        }
+      }
+
       const auto logic_end = std::chrono::steady_clock::now();
-
-      logic_latencies_ns.push_back(static_cast<std::uint64_t>(
+      benchmark_samples.logic_latency_ns.push_back(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(logic_end - logic_start).count()));
-
-      if (!cycle) {
-        continue;
-      }
-
-      OpportunitySummary opportunity;
-      if (!compute_opportunity(cycle.value(), books, symbols, config_.fee_bps, opportunity)) {
-        continue;
-      }
-
-      if (opportunity.gross_profit_percent <= 0.0) {
-        continue;
-      }
-
-      ++summary.arbitrage_detections;
-      summary.last_opportunity = opportunity;
-
-      if (!config_.quiet) {
-        print_opportunity(opportunity);
-      }
     }
   });
 
   replay_thread.join();
   strategy_thread.join();
-
-  const auto end_time = std::chrono::steady_clock::now();
-  summary.elapsed_seconds =
-      std::chrono::duration_cast<std::chrono::duration<double>>(end_time - start_time).count();
-  summary.max_queue_depth = max_queue_depth.load(std::memory_order_relaxed);
-  summary.logic_latency = summarize_latencies(std::move(logic_latencies_ns));
 
   if (producer_failed.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> lock(error_mutex);
@@ -368,6 +413,24 @@ RunSummary ReplayRunner::run() const {
     return summary;
   }
 
+  if (summary.total_events_seen <= config_.warmup_events) {
+    summary.error_message =
+        "Warmup consumed the entire replay: requested " +
+        std::to_string(config_.warmup_events) +
+        " warmup events, but replay only contained " +
+        std::to_string(summary.total_events_seen) + ".";
+    return summary;
+  }
+
+  const auto end_time = std::chrono::steady_clock::now();
+  if (measured_start_time.has_value()) {
+    summary.elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(
+        end_time - measured_start_time.value()).count();
+  }
+  summary.max_queue_depth = max_queue_depth.load(std::memory_order_relaxed);
+  summary.logic_latency = summarize_latencies(benchmark_samples.logic_latency_ns);
+  summary.stage_latencies = summarize_stage_latencies(benchmark_samples.stage_latencies);
+  summary.benchmark_samples = std::move(benchmark_samples);
   summary.succeeded = true;
   return summary;
 }

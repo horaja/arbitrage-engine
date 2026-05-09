@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(arb_core
   arbitragegraph.cpp
+  benchmark_metrics.cpp
   book_builder.cpp
   clock.cpp
   replay_adapter.cpp
@@ -21,7 +22,10 @@ target_include_directories(arb_core PUBLIC
 add_executable(arb_engine engine_main.cpp)
 target_link_libraries(arb_engine PRIVATE arb_core)
 
-add_executable(arb_benchmark benchmark_main.cpp)
+add_executable(arb_benchmark
+  benchmark_main.cpp
+  benchmark_report.cpp
+)
 target_link_libraries(arb_benchmark PRIVATE arb_core)
 
 add_executable(smoke_tests smoke_tests.cpp)

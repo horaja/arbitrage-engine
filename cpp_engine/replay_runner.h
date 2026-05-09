@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "benchmark_metrics.h"
 #include "clock.h"
 #include "market_event.h"
 
@@ -17,31 +18,26 @@ struct OpportunitySummary {
   std::string anchor_currency;
 };
 
-struct LatencySummary {
-  std::uint64_t min_ns = 0;
-  std::uint64_t avg_ns = 0;
-  std::uint64_t p50_ns = 0;
-  std::uint64_t p95_ns = 0;
-  std::uint64_t p99_ns = 0;
-  std::uint64_t max_ns = 0;
-};
-
 struct EngineConfig {
   std::string input_path;
   int replay_delay_ms = 0;
   ClockMode clock_mode = ClockMode::ReplayTime;
   bool quiet = false;
   double fee_bps = 0.0;
+  std::size_t warmup_events = 0;
 };
 
 struct RunSummary {
   bool succeeded = false;
   std::string error_message;
+  std::size_t total_events_seen = 0;
   std::size_t events_processed = 0;
   std::size_t arbitrage_detections = 0;
   std::size_t max_queue_depth = 0;
   double elapsed_seconds = 0.0;
   LatencySummary logic_latency;
+  StageLatencySummary stage_latencies;
+  BenchmarkSamples benchmark_samples;
   std::optional<OpportunitySummary> last_opportunity;
 };
 
