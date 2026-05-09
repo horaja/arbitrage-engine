@@ -1,0 +1,3 @@
+timestamp,symbol,price,quantity
+2026-01-01T00:00:00Z,BTC-USD,50000,0.25
+2026-01-01T00:00:01Z,ETH-USD,not-a-number,1.00

@@ -5,21 +5,30 @@ project(ArbitrageEngine)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-
-find_package(Boost REQUIRED COMPONENTS system thread)
-find_package(Eigen3)
-# TODO: find_package(websocketpp REQUIRED)
-
-
-add_executable(arbitrage_engine main.cpp arbitragegraph.cpp)
-target_include_directories(arbitrage_engine PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/libs
-  ${Boost_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIR}
-  # ${WEBSOCKETPP_INCLUDE_DIR}
+add_library(arb_core
+  arbitragegraph.cpp
+  clock.cpp
+  replay_adapter.cpp
+  replay_runner.cpp
 )
 
-target_link_libraries(arbitrage_engine PRIVATE
-  Boost::system
-  Boost::thread
+target_include_directories(arb_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/libs
+)
+
+add_executable(arb_engine engine_main.cpp)
+target_link_libraries(arb_engine PRIVATE arb_core)
+
+add_executable(arb_benchmark benchmark_main.cpp)
+target_link_libraries(arb_benchmark PRIVATE arb_core)
+
+add_executable(smoke_tests smoke_tests.cpp)
+target_compile_definitions(smoke_tests PRIVATE ARB_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(smoke_tests PRIVATE arb_core)
+
+enable_testing()
+add_test(
+  NAME smoke_tests
+  COMMAND smoke_tests
 )
