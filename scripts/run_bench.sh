@@ -121,7 +121,7 @@ run_perf_stat() {
     2>"${raw_output}" || true
 
   cd "${NORMALIZER_DIR}"
-  python3 normalize_perf_stat.py "${raw_output}" --command "${command_str}" "${tag_args[@]+"${tag_args[@]}"}"
+  python3 normalize_perf_stat.py "${raw_output}" --command "${command_str}" "${tag_args[@]+"${tag_args[@]}"}" || true
   cd "${REPO_ROOT}"
   echo
 }
@@ -145,7 +145,7 @@ run_cachegrind() {
   cg_annotate "${cg_out}" > "${annotated}"
 
   cd "${NORMALIZER_DIR}"
-  python3 normalize_cachegrind.py "${annotated}" --command "${command_str}" "${tag_args[@]+"${tag_args[@]}"}"
+  python3 normalize_cachegrind.py "${annotated}" --command "${command_str}" "${tag_args[@]+"${tag_args[@]}"}" || true
   cd "${REPO_ROOT}"
   echo
 }

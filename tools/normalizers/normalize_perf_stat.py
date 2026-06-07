@@ -40,9 +40,9 @@ PERF_LINE_RE = re.compile(
     r"(?:\s+.*)?$"
 )
 
-# Derived metric lines like:
-#   1.42  insn per cycle
-IPC_RE = re.compile(r"^\s*(?P<value>[\d.]+)\s+insn per cycle")
+# IPC usually appears as a comment on the instructions line:
+#   5,678,901      instructions      #    4.60  insn per cycle
+IPC_RE = re.compile(r"(?P<value>[\d.]+)\s+insn per cycle")
 
 # Elapsed time line:
 #   0.123456789 seconds time elapsed
@@ -72,6 +72,13 @@ def parse_perf_output(text: str) -> dict[str, dict]:
     metrics: dict[str, dict] = {}
 
     for line in text.splitlines():
+        # Check elapsed time first: it would otherwise be mis-parsed as an
+        # event named "seconds" by the generic counter pattern.
+        m = ELAPSED_RE.match(line)
+        if m:
+            metrics["elapsed_seconds"] = metric(float(m.group("value")), "s")
+            continue
+
         m = PERF_LINE_RE.match(line)
         if m:
             raw_value = m.group("value").replace(",", "")
@@ -83,16 +90,15 @@ def parse_perf_output(text: str) -> dict[str, dict]:
             unit = UNIT_MAP.get(event, "count")
             metric_name = event.replace("-", "_")
             metrics[metric_name] = metric(value, unit)
+            # IPC may be reported as a comment on the same (instructions) line.
+            ipc = IPC_RE.search(line)
+            if ipc and "ipc" not in metrics:
+                metrics["ipc"] = metric(float(ipc.group("value")), "ratio")
             continue
 
-        m = IPC_RE.match(line)
-        if m:
-            metrics["ipc"] = metric(float(m.group("value")), "ratio")
-            continue
-
-        m = ELAPSED_RE.match(line)
-        if m:
-            metrics["elapsed_seconds"] = metric(float(m.group("value")), "s")
+        ipc = IPC_RE.search(line)
+        if ipc and "ipc" not in metrics:
+            metrics["ipc"] = metric(float(ipc.group("value")), "ratio")
 
     # Derived: cache miss rate
     if "cache_misses" in metrics and "cache_references" in metrics:
@@ -125,6 +131,19 @@ def main() -> int:
     except OSError as e:
         print(f"error reading input: {e}")
         return 1
+
+    if "perf_event_paranoid" in text or "Access to performance monitoring" in text:
+        print(
+            "error: perf could not access performance counters.\n"
+            "  Your kernel's perf_event_paranoid setting is blocking access.\n"
+            "  Fix (temporary, until reboot):\n"
+            "    sudo sysctl kernel.perf_event_paranoid=1\n"
+            "  Fix (permanent):\n"
+            "    echo 'kernel.perf_event_paranoid=1' | sudo tee /etc/sysctl.d/99-perf.conf\n"
+            "    sudo sysctl --system\n"
+            "  Or run the benchmark under sudo perf."
+        )
+        return 2
 
     metrics = parse_perf_output(text)
     if not metrics:
