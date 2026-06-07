@@ -29,7 +29,10 @@ trade_data.csv
 latency_training_data.csv
 
 # Benchmarking files
-benchmark_*/
+benchmark_data/
+benchmark_plots/
+benchmark_results/
+benchmarks/.tmp/
 
 # TODO
 TODO.md
