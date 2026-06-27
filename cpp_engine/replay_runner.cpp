@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,10 @@ struct ReplayMessage {
   }
 };
 
+static_assert(std::is_trivially_copyable<ReplayMessage>::value,
+              "ReplayMessage must stay trivially copyable so the SPSC queue can "
+              "move it between threads without per-element allocation.");
+
 void update_max_depth(std::atomic<std::size_t>& max_depth, std::size_t candidate_depth) {
   std::size_t observed = max_depth.load(std::memory_order_relaxed);
   while (candidate_depth > observed &&
@@ -69,21 +74,17 @@ struct LegInfo {
 
 bool build_leg_lookup(
     const BookBuilder& books,
-    const std::vector<std::string>& symbols,
+    const SymbolRegistry& registry,
     std::map<std::pair<std::string, std::string>, LegInfo>& out) {
   out.clear();
-  for (const auto& symbol : symbols) {
-    const auto delimiter_pos = symbol.find('-');
-    if (delimiter_pos == std::string::npos) {
-      return false;
-    }
-    const std::string base = symbol.substr(0, delimiter_pos);
-    const std::string quote = symbol.substr(delimiter_pos + 1);
-
-    const TopOfBookQuote* latest = books.latest(symbol);
+  for (std::uint32_t symbol_id = 0; symbol_id < registry.symbol_count(); ++symbol_id) {
+    const TopOfBookQuote* latest = books.latest(symbol_id);
     if (latest == nullptr) {
       continue;
     }
+    const SymbolDescriptor& descriptor = registry.descriptor(symbol_id);
+    const std::string& base = registry.currency_name(descriptor.base_currency_id);
+    const std::string& quote = registry.currency_name(descriptor.quote_currency_id);
     out[{base, quote}] = LegInfo{latest->bid_price, latest->bid_size};
     out[{quote, base}] = LegInfo{1.0 / latest->ask_price, latest->ask_size * latest->ask_price};
   }
@@ -128,7 +129,7 @@ std::vector<std::string> rotate_cycle(const std::vector<std::string>& cycle) {
 bool compute_opportunity(
     const std::vector<std::string>& raw_cycle,
     const BookBuilder& books,
-    const std::vector<std::string>& symbols,
+    const SymbolRegistry& registry,
     double fee_bps,
     OpportunitySummary& out) {
   if (raw_cycle.size() < 3) {
@@ -136,7 +137,7 @@ bool compute_opportunity(
   }
 
   std::map<std::pair<std::string, std::string>, LegInfo> leg_lookup;
-  if (!build_leg_lookup(books, symbols, leg_lookup)) {
+  if (!build_leg_lookup(books, registry, leg_lookup)) {
     return false;
   }
 
@@ -209,7 +210,7 @@ bool extract_top_of_book(
     TopOfBookQuote& quote,
     std::string& error_message) {
   if (event.event_type != MarketEventType::TopOfBookQuote || !event.top_of_book.has_value()) {
-    error_message = "Unsupported market event payload for symbol: " + event.symbol;
+    error_message = "Unsupported market event payload for symbol id: " + std::to_string(event.symbol_id);
     return false;
   }
 
@@ -244,10 +245,10 @@ RunSummary ReplayRunner::run() const {
     return summary;
   }
 
-  const std::vector<std::string> symbols = replay_adapter->metadata().symbols;
-  ArbitrageGraph graph(symbols);
-  BookBuilder books;
-  SPSCQueue<ReplayMessage> event_queue;
+  const SymbolRegistry& registry = replay_adapter->registry();
+  ArbitrageGraph graph(registry);
+  BookBuilder books(registry.symbol_count());
+  SPSCQueue<ReplayMessage> event_queue(config_.queue_capacity);
   std::unique_ptr<Clock> replay_clock = make_clock(config_);
 
   std::atomic<std::size_t> max_queue_depth{0};
@@ -360,7 +361,7 @@ RunSummary ReplayRunner::run() const {
       }
 
       const auto apply_start = logic_start;
-      const bool quote_applied = books.apply_quote(message.event.symbol, quote);
+      const bool quote_applied = books.apply_quote(message.event.symbol_id, quote);
       const auto apply_end = std::chrono::steady_clock::now();
 
       if (!measured_event) {
@@ -368,7 +369,7 @@ RunSummary ReplayRunner::run() const {
           continue;
         }
 
-        graph.update_quote(message.event.symbol, quote);
+        graph.update_quote(message.event.symbol_id, quote);
         (void)graph.find_arbitrage_cycle();
         continue;
       }
@@ -383,7 +384,7 @@ RunSummary ReplayRunner::run() const {
       }
 
       const auto graph_start = std::chrono::steady_clock::now();
-      graph.update_quote(message.event.symbol, quote);
+      graph.update_quote(message.event.symbol_id, quote);
       const auto graph_end = std::chrono::steady_clock::now();
       benchmark_samples.stage_latencies.graph_update_quote_ns.push_back(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(graph_end - graph_start).count()));
@@ -400,7 +401,7 @@ RunSummary ReplayRunner::run() const {
         const bool computed = compute_opportunity(
             cycle.value(),
             books,
-            symbols,
+            registry,
             config_.fee_bps,
             opportunity);
         const auto opportunity_end = std::chrono::steady_clock::now();

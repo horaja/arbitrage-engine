@@ -25,6 +25,7 @@ struct EngineConfig {
   bool quiet = false;
   double fee_bps = 0.0;
   std::size_t warmup_events = 0;
+  std::size_t queue_capacity = 4096;
 };
 
 struct RunSummary {

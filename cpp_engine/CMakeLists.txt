@@ -12,6 +12,7 @@ add_library(arb_core
   clock.cpp
   replay_adapter.cpp
   replay_runner.cpp
+  symbol_registry.cpp
 )
 
 target_include_directories(arb_core PUBLIC
@@ -37,3 +38,23 @@ add_test(
   NAME smoke_tests
   COMMAND smoke_tests
 )
+
+# Optional Google Benchmark microbenchmark target. Off by default so the normal
+# build stays self-contained and offline-friendly; enable with
+# -DARB_BUILD_MICROBENCH=ON to fetch Google Benchmark and build arb_microbench.
+option(ARB_BUILD_MICROBENCH "Build the Google Benchmark microbenchmark suite" OFF)
+
+if(ARB_BUILD_MICROBENCH)
+  include(FetchContent)
+  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+  set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    googlebenchmark
+    GIT_REPOSITORY https://github.com/google/benchmark.git
+    GIT_TAG v1.8.3
+  )
+  FetchContent_MakeAvailable(googlebenchmark)
+
+  add_executable(arb_microbench microbench_main.cpp)
+  target_link_libraries(arb_microbench PRIVATE arb_core benchmark::benchmark)
+endif()

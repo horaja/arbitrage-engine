@@ -1,21 +1,27 @@
 #pragma once
 
-#include <string>
-#include <unordered_map>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "market_event.h"
 
+// Maintains the latest valid top-of-book per symbol. Symbols are addressed by
+// the dense integer ids assigned by SymbolRegistry, so lookups and updates are
+// O(1) array access with no hashing or steady-state reallocation.
 class BookBuilder {
 public:
-  bool apply_quote(const std::string& symbol, const TopOfBookQuote& quote);
+  explicit BookBuilder(std::size_t symbol_count);
 
-  const TopOfBookQuote* latest(const std::string& symbol) const;
+  bool apply_quote(std::uint32_t symbol_id, const TopOfBookQuote& quote);
 
-  bool all_available(const std::vector<std::string>& symbols) const;
+  const TopOfBookQuote* latest(std::uint32_t symbol_id) const;
+
+  bool all_available(const std::vector<std::uint32_t>& symbol_ids) const;
 
   static bool is_valid(const TopOfBookQuote& quote);
 
 private:
-  std::unordered_map<std::string, TopOfBookQuote> latest_by_symbol_;
+  std::vector<TopOfBookQuote> latest_by_symbol_;
+  std::vector<bool> has_quote_;
 };

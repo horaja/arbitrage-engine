@@ -1,229 +1,142 @@
 /**
  * @file arbitragegraph.cpp
- * @brief Implements the ArbitrageGraph class for detecting cryptocurrency arbitrage opportunities.
+ * @brief Implements ArbitrageGraph negative-cycle detection over executable quotes.
  *
  * @details
- * This file contains the implementation of the ArbitrageGraph class, which is the core of the
- * arbitrage detection engine. The fundamental idea is to represent the cryptocurrency market
- * as a directed graph where:
- * - Each currency (e.g., BTC, ETH, USD) is a **vertex** (or node).
- * - Each trading pair (e.g., BTC-USD) represents two directed **edges** between the
- * corresponding currency vertices (e.g., BTC -> USD and USD -> BTC).
+ * The market is a directed graph: each currency is a vertex and each trading pair
+ * contributes two directed edges (BASE -> QUOTE and QUOTE -> BASE). Triangular
+ * arbitrage is a cycle whose exchange-rate product exceeds 1; taking edge weights
+ * as -log(rate) turns this into a negative-weight cycle, found with SPFA (a
+ * queue-based optimization of Bellman-Ford) that re-relaxes only the vertices
+ * touched by recent quote updates.
  *
- * The goal of triangular arbitrage is to find a sequence of trades (a cycle in the graph)
- * that results in a profit. For example, starting with USD, buying BTC, selling the BTC
- * for ETH, and then selling the ETH back to USD.
- *
- * This problem can be modeled as finding a "negative weight cycle" in the graph.
- * If the edge weights were simply the exchange rates, we would look for a cycle where the
- * product of rates is greater than 1. However, by transforming the edge weights using the
- * negative logarithm of the exchange rates (-log(rate)), the problem becomes finding a
- * cycle where the sum of weights is negative. This is a classic graph theory problem that
- * can be solved efficiently.
- *
- * This implementation uses the Shortest Path Faster Algorithm (SPFA), which is an
- * optimization of the Bellman-Ford algorithm. SPFA is particularly well-suited for this
- * use case because it efficiently handles sparse graphs (graphs with relatively few edges
- * compared to vertices) and can quickly re-evaluate the graph as new price ticks arrive,
- * without recomputing everything from scratch.
+ * The graph is sized once from the SymbolRegistry. Adjacency is stored in CSR
+ * form (a flat edge array plus per-vertex offsets) and each symbol owns fixed
+ * forward/reverse edge slots, so a quote update is two array writes by id.
  */
 
 #include "arbitragegraph.h"
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <limits>
-#include <set>
-#include <stdexcept>
 
-/**
- * @brief Creates a unique 64-bit key for an edge.
- * 
- * @param source_id The integer ID of the source currency vertex.
- * @param dest_id The integer ID of the destination currency vertex.
- * @return A unique 64-bit integer key representing the directed edge.
- */
-uint64_t ArbitrageGraph::create_edge_key(int source_id, int dest_id) const {
-  return (static_cast<uint64_t>(source_id) << 32) | dest_id;
-}
-
-/**
- * @brief Gets the weight of a specific edge in the graph.
- * @param source_currency Starting currency
- * @param dest_currency Destination currency
- * @return Edge weight, or infinity if edge doesn't exist
- */
-double ArbitrageGraph::get_edge_weight(const std::string& source_currency, const std::string& dest_currency) const {
-  auto source_iter = currency_to_id.find(source_currency);
-  auto dest_iter = currency_to_id.find(dest_currency);
-
-  if (source_iter == currency_to_id.end() || dest_iter == currency_to_id.end()) {
+double ArbitrageGraph::get_edge_weight(const std::string& source_currency,
+                                       const std::string& dest_currency) const {
+  const auto source_iter = std::find(id_to_currency_.begin(), id_to_currency_.end(), source_currency);
+  const auto dest_iter = std::find(id_to_currency_.begin(), id_to_currency_.end(), dest_currency);
+  if (source_iter == id_to_currency_.end() || dest_iter == id_to_currency_.end()) {
     return std::numeric_limits<double>::infinity();
   }
 
-  int source_id = source_iter->second;
-  int dest_id = dest_iter->second;
-  uint64_t key = create_edge_key(source_id, dest_id);
-
-  auto edge_iter = edge_index_map.find(key);
-  if (edge_iter == edge_index_map.end()) {
-    return std::numeric_limits<double>::infinity();
-  }
-
-  return adjacency_list[source_id][edge_iter->second].weight;
-}
-
-/**
- * @brief Constructs the ArbitrageGraph.
- *
- * This constructor initializes the graph structure. It identifies all unique currencies
- * from the list of trading pairs, assigns each a unique integer ID, and sets up the
- * data structures needed for the SPFA algorithm.
- *  
- * @param symbols A vector of strings, where each string is a trading pair (e.g., "BTC-USD").
- */
-ArbitrageGraph::ArbitrageGraph(const std::vector<std::string>& symbols) {
-
-  /* Fill set of currency names */
-  std::set<std::string> unique_currencies;
-  for (const auto& symbol : symbols) {
-    size_t delimiter_pos = symbol.find('-');
-    if (delimiter_pos != std::string::npos) {
-      unique_currencies.insert(symbol.substr(0, delimiter_pos));
-      unique_currencies.insert(symbol.substr(delimiter_pos+1));
+  const int source_id = static_cast<int>(source_iter - id_to_currency_.begin());
+  const int dest_id = static_cast<int>(dest_iter - id_to_currency_.begin());
+  for (int i = row_start_[source_id]; i < row_start_[source_id + 1]; ++i) {
+    if (edges_[i].destination_id == dest_id) {
+      return edges_[i].weight;
     }
   }
-
-  /* 2 maps for stirng->int conversion of currency names */
-  this->num_vertices = unique_currencies.size();
-  int current_id = 0;
-  for (const auto& currency_name : unique_currencies) {
-    this->currency_to_id[currency_name] = current_id;
-    this->id_to_currency.push_back(currency_name);
-    current_id++;
-  }
-
-  /* Data structure initialization for SPFA */
-  this->adjacency_list.resize(num_vertices);
-  this->distance.resize(num_vertices, std::numeric_limits<double>::infinity());
-  this->predecessor.resize(num_vertices, -1);
-  this->update_counts.resize(num_vertices, 0);
-  this->in_queue.resize(num_vertices, false);
-
-  // Initialize all vertices to distance 0 for negative cycle detection
-  for (int i = 0; i < num_vertices; i++) {
-    distance[i] = 0.0;
-  }
+  return std::numeric_limits<double>::infinity();
 }
 
-/**
- * @brief Updates both directional edges of a pair from an executable top-of-book quote.
- *
- * For pair "BASE-QUOTE":
- *   forward (BASE -> QUOTE): selling base for quote at the bid -> weight = -log(bid)
- *   reverse (QUOTE -> BASE): buying base with quote at the ask -> weight = -log(1/ask) = log(ask)
- *
- * @param symbol The trading pair that has a new quote (e.g., "BTC-USD").
- * @param quote The latest valid top-of-book quote for the symbol.
- */
-void ArbitrageGraph::update_quote(const std::string& symbol, const TopOfBookQuote& quote) {
+ArbitrageGraph::ArbitrageGraph(const SymbolRegistry& registry) {
+  num_vertices = static_cast<int>(registry.currency_count());
+  const std::size_t symbol_count = registry.symbol_count();
 
-  size_t delimiter_pos = symbol.find('-');
-  if (delimiter_pos == std::string::npos) {
-    throw std::runtime_error("Invalid symbol format. Expected 'BASE-QUOTE', but received: '" + symbol + "'");
+  id_to_currency_.reserve(num_vertices);
+  for (int i = 0; i < num_vertices; ++i) {
+    id_to_currency_.push_back(registry.currency_name(static_cast<std::uint32_t>(i)));
   }
 
-  std::string base_currency = symbol.substr(0, delimiter_pos);
-  std::string quote_currency = symbol.substr(delimiter_pos + 1);
-
-  auto const base_iter = currency_to_id.find(base_currency);
-  auto const quote_iter = currency_to_id.find(quote_currency);
-
-  if (base_iter == currency_to_id.end() || quote_iter == currency_to_id.end()) {
-    std::cerr << "Error: One or both currencies in the pair '" << base_currency << "-" << quote_currency << "' are not tracked." << std::endl;
-    return;
+  // CSR build: count out-degree per vertex (one outgoing edge per symbol per
+  // endpoint), prefix-sum into row offsets, then place each symbol's two edges.
+  row_start_.assign(num_vertices + 1, 0);
+  for (std::uint32_t s = 0; s < symbol_count; ++s) {
+    const SymbolDescriptor& descriptor = registry.descriptor(s);
+    ++row_start_[descriptor.base_currency_id + 1];
+    ++row_start_[descriptor.quote_currency_id + 1];
+  }
+  for (int v = 0; v < num_vertices; ++v) {
+    row_start_[v + 1] += row_start_[v];
   }
 
-  int base_id = base_iter->second;
-  int quote_id = quote_iter->second;
+  // Edges start at +infinity so an un-quoted pair never relaxes (it behaves as
+  // absent until a real quote arrives, matching incremental edge insertion).
+  edges_.assign(row_start_[num_vertices], Edge{0, std::numeric_limits<double>::infinity()});
+  symbol_edge_slots_.resize(symbol_count);
+  std::vector<int> cursor(row_start_.begin(), row_start_.end() - 1);
+  for (std::uint32_t s = 0; s < symbol_count; ++s) {
+    const SymbolDescriptor& descriptor = registry.descriptor(s);
+    const int base_id = static_cast<int>(descriptor.base_currency_id);
+    const int quote_id = static_cast<int>(descriptor.quote_currency_id);
 
-  double forward_weight = -std::log(quote.bid_price);
-  double reverse_weight = std::log(quote.ask_price);
+    const int forward_index = cursor[base_id]++;
+    edges_[forward_index].destination_id = quote_id;
+    const int reverse_index = cursor[quote_id]++;
+    edges_[reverse_index].destination_id = base_id;
 
-  uint64_t forward_key = create_edge_key(base_id, quote_id);
-  if (edge_index_map.find(forward_key) == edge_index_map.end()) {
-    adjacency_list[base_id].push_back({quote_id, forward_weight});
-    edge_index_map[forward_key] = adjacency_list[base_id].size() - 1;
-  } else {
-    adjacency_list[base_id][edge_index_map[forward_key]].weight = forward_weight;
+    symbol_edge_slots_[s] = EdgeSlots{
+        static_cast<std::uint32_t>(forward_index),
+        static_cast<std::uint32_t>(reverse_index),
+        base_id,
+        quote_id,
+    };
   }
 
-  uint64_t reverse_key = create_edge_key(quote_id, base_id);
-  if (edge_index_map.find(reverse_key) == edge_index_map.end()) {
-    adjacency_list[quote_id].push_back({base_id, reverse_weight});
-    edge_index_map[reverse_key] = adjacency_list[quote_id].size() - 1;
-  } else {
-    adjacency_list[quote_id][edge_index_map[reverse_key]].weight = reverse_weight;
-  }
-
-  dirty_vertices.push_back(base_id);
-  dirty_vertices.push_back(quote_id);
+  distance.assign(num_vertices, 0.0);
+  predecessor.assign(num_vertices, -1);
+  update_counts.assign(num_vertices, 0);
+  in_queue.assign(num_vertices, false);
+  dirty_vertices_.reserve(2 * symbol_count);
+  spfa_queue_.reserve(num_vertices > 0 ? num_vertices : 1);
 }
 
-/**
- * @brief Finds a negative weight cycle in the graph, which represents an arbitrage opportunity.
- *
- * This function implements the Shortest Path Faster Algorithm (SPFA). It iteratively
- * "relaxes" the edges of the graph, updating the shortest known distance from the source
- * to each vertex. If it detects that a vertex has been updated more times than there are
- * vertices in the graph, it signifies the presence of a negative weight cycle.
- *
- * Key optimizations:
- * - Only processes vertices affected by recent price updates (dirty_vertices)
- * - Prevents duplicate queue entries with in_queue tracking
- * - Resets state between calls for correctness
- *
- * @return An `std::optional` containing a vector of currency names in the cycle if one is found,
- * or `std::nullopt` if no opportunity exists.
- */
+void ArbitrageGraph::update_quote(std::uint32_t symbol_id, const TopOfBookQuote& quote) {
+  const EdgeSlots& slots = symbol_edge_slots_[symbol_id];
+
+  edges_[slots.forward_index].weight = -std::log(quote.bid_price);
+  edges_[slots.reverse_index].weight = std::log(quote.ask_price);
+
+  dirty_vertices_.push_back(slots.base_id);
+  dirty_vertices_.push_back(slots.quote_id);
+}
+
 std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
   std::fill(distance.begin(), distance.end(), 0.0);
   std::fill(predecessor.begin(), predecessor.end(), -1);
   std::fill(update_counts.begin(), update_counts.end(), 0);
   std::fill(in_queue.begin(), in_queue.end(), false);
 
-  std::deque<int> processing_queue = dirty_vertices;
-  for (int vertex : processing_queue) {
-    in_queue[vertex] = true;
+  spfa_queue_.clear();
+  for (const int vertex : dirty_vertices_) {
+    if (!in_queue[vertex]) {
+      in_queue[vertex] = true;
+      spfa_queue_.push_back(vertex);
+    }
   }
-  dirty_vertices.clear();
+  dirty_vertices_.clear();
 
-  while (!processing_queue.empty()) {
-
-    int u = processing_queue.front();
-    processing_queue.pop_front();
+  std::size_t head = 0;
+  while (head < spfa_queue_.size()) {
+    const int u = spfa_queue_[head++];
     in_queue[u] = false;
 
-    for (const auto& edge : adjacency_list[u]) {
-
-      int v = edge.destination_id;
-      double weight = edge.weight;
+    for (int i = row_start_[u]; i < row_start_[u + 1]; ++i) {
+      const int v = edges_[i].destination_id;
+      const double weight = edges_[i].weight;
 
       if (distance[u] + weight < distance[v]) {
         distance[v] = distance[u] + weight;
         predecessor[v] = u;
 
         if (!in_queue[v]) {
-          processing_queue.push_back(v);
+          spfa_queue_.push_back(v);
           in_queue[v] = true;
         }
 
-        update_counts[v]++;
-        if (update_counts[v] >= num_vertices) {
+        if (++update_counts[v] >= num_vertices) {
           auto cycle = reconstruct_cycle(v);
           if (cycle) {
-            std::fill(update_counts.begin(), update_counts.end(), 0);
             return cycle;
           }
         }
@@ -234,40 +147,33 @@ std::optional<std::vector<std::string>> ArbitrageGraph::find_arbitrage_cycle() {
   return std::nullopt;
 }
 
-/**
- * @brief Reconstructs the arbitrage cycle from the predecessor list.
- * 
- * Once a negative cycle is detected by `find_arbitrage_cycle`, this function is called
- * to trace back through the `predecessor` array to identify the exact path of the cycle.
- * 
- * @param start_node A node that is part of the detected negative cycle.
- * @return A vector of strings representing the currencies in the arbitrage cycle.
- */
 std::optional<std::vector<std::string>> ArbitrageGraph::reconstruct_cycle(int start_node) const {
-  std::vector<std::string> cycle;
-  std::vector<int> path;
-
+  // Walk back num_vertices predecessors to land on a node guaranteed inside the
+  // negative cycle, then trace the cycle once.
   int current = start_node;
-  for (int i = 0; i < num_vertices; i++) {
+  for (int i = 0; i < num_vertices; ++i) {
     if (predecessor[current] == -1) {
       return std::nullopt;
     }
     current = predecessor[current];
   }
 
-  int cycle_start = current;
+  const int cycle_start = current;
+  std::vector<int> path;
   do {
-    path.insert(path.begin(), current);
+    path.push_back(current);
     if (predecessor[current] == -1) {
       return std::nullopt;
     }
     current = predecessor[current];
   } while (current != cycle_start);
-  path.insert(path.begin(), cycle_start);
+  path.push_back(cycle_start);
+  std::reverse(path.begin(), path.end());
 
-  for (int node_id : path) {
-    cycle.push_back(id_to_currency.at(node_id));
+  std::vector<std::string> cycle;
+  cycle.reserve(path.size());
+  for (const int node_id : path) {
+    cycle.push_back(id_to_currency_[node_id]);
   }
-
   return cycle;
 }

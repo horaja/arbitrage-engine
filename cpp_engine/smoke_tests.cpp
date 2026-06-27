@@ -36,10 +36,14 @@ int main() {
 
     MarketEvent first_event;
     all_passed &= require(adapter.next_event(first_event, error_message), "sample adapter should emit the first event");
-    all_passed &= require(first_event.exchange_timestamp == "2026-01-01T00:00:00Z", "first event exchange timestamp should match");
-    all_passed &= require(first_event.receive_timestamp == first_event.exchange_timestamp, "first event receive timestamp should match exchange timestamp");
+    // 2026-01-01T00:00:00Z == 1767225600 epoch seconds (~56 years after 1970).
+    all_passed &= require(first_event.exchange_time_ns == 1767225600000000000LL, "first event exchange timestamp should parse to ns");
+    all_passed &= require(first_event.receive_time_ns == first_event.exchange_time_ns, "first event receive timestamp should match exchange timestamp");
     all_passed &= require(first_event.event_type == MarketEventType::TopOfBookQuote, "first event should be a top-of-book quote");
-    all_passed &= require(first_event.symbol == "BTC-USD", "first event symbol should match");
+    std::uint32_t btc_usd_id = 0;
+    all_passed &= require(adapter.registry().find_symbol("BTC-USD", btc_usd_id), "registry should resolve BTC-USD");
+    all_passed &= require(first_event.symbol_id == btc_usd_id, "first event symbol id should match registry");
+    all_passed &= require(adapter.registry().symbol_name(first_event.symbol_id) == "BTC-USD", "symbol id should resolve back to BTC-USD");
     all_passed &= require(first_event.top_of_book.has_value(), "first event should carry a quote payload");
     all_passed &= require(first_event.top_of_book->bid_price == 50000.0, "first event bid should match");
     all_passed &= require(first_event.top_of_book->bid_size == 1.0, "first event bid size should match");
@@ -48,14 +52,25 @@ int main() {
   }
 
   {
-    BookBuilder books;
-    all_passed &= require(books.apply_quote("BTC-USD", {50000, 1.0, 50010, 1.0}), "valid quote should be accepted");
-    all_passed &= require(!books.apply_quote("BTC-USD", {0.0, 1.0, 50010, 1.0}), "non-positive bid should be rejected");
-    all_passed &= require(!books.apply_quote("BTC-USD", {50020, 1.0, 50010, 1.0}), "crossed book should be rejected");
-    all_passed &= require(books.latest("BTC-USD") != nullptr, "last valid quote should remain after rejected updates");
-    all_passed &= require(books.latest("BTC-USD")->bid_price == 50000.0, "latest bid should reflect last valid quote");
-    all_passed &= require(books.all_available({"BTC-USD"}), "BookBuilder should report availability for known symbol");
-    all_passed &= require(!books.all_available({"BTC-USD", "ETH-USD"}), "BookBuilder should reject availability when a symbol is missing");
+    SymbolRegistry registry;
+    std::string intern_error;
+    std::uint32_t btc_usd = 0;
+    std::uint32_t eth_usd = 0;
+    all_passed &= require(registry.intern_symbol("BTC-USD", btc_usd, intern_error), "registry should intern BTC-USD");
+    all_passed &= require(registry.intern_symbol("ETH-USD", eth_usd, intern_error), "registry should intern ETH-USD");
+    std::uint32_t btc_usd_again = 99;
+    all_passed &= require(registry.intern_symbol("BTC-USD", btc_usd_again, intern_error), "re-interning should succeed");
+    all_passed &= require(btc_usd_again == btc_usd, "re-interning a symbol should return the same id");
+    all_passed &= require(registry.symbol_name(btc_usd) == "BTC-USD", "symbol id should round-trip to its name");
+
+    BookBuilder books(registry.symbol_count());
+    all_passed &= require(books.apply_quote(btc_usd, {50000, 1.0, 50010, 1.0}), "valid quote should be accepted");
+    all_passed &= require(!books.apply_quote(btc_usd, {0.0, 1.0, 50010, 1.0}), "non-positive bid should be rejected");
+    all_passed &= require(!books.apply_quote(btc_usd, {50020, 1.0, 50010, 1.0}), "crossed book should be rejected");
+    all_passed &= require(books.latest(btc_usd) != nullptr, "last valid quote should remain after rejected updates");
+    all_passed &= require(books.latest(btc_usd)->bid_price == 50000.0, "latest bid should reflect last valid quote");
+    all_passed &= require(books.all_available({btc_usd}), "BookBuilder should report availability for known symbol");
+    all_passed &= require(!books.all_available({btc_usd, eth_usd}), "BookBuilder should reject availability when a symbol is missing");
   }
 
   {

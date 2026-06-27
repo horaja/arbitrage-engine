@@ -11,7 +11,7 @@ namespace {
 
 void print_usage() {
   std::cout << "Usage: arb_benchmark --input <csv-path> [--repeat <n>] "
-               "[--warmup-events <n>] [--output-json <path>]\n";
+               "[--warmup-events <n>] [--queue-capacity <n>] [--output-json <path>]\n";
 }
 
 bool parse_positive_size(const std::string& value, std::size_t& parsed_value) {
@@ -119,6 +119,15 @@ int main(int argc, char* argv[]) {
     if (argument == "--warmup-events" && index + 1 < argc) {
       if (!parse_size(argv[++index], config.warmup_events)) {
         std::cerr << "Invalid value for --warmup-events.\n";
+        print_usage();
+        return 1;
+      }
+      continue;
+    }
+
+    if (argument == "--queue-capacity" && index + 1 < argc) {
+      if (!parse_positive_size(argv[++index], config.queue_capacity)) {
+        std::cerr << "Invalid value for --queue-capacity.\n";
         print_usage();
         return 1;
       }

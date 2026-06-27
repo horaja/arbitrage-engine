@@ -6,7 +6,8 @@ This repository is a replay-driven triangular arbitrage prototype with a C++ hot
 
 ## Current Scope
 
-- Typed `MarketEvent` envelope carrying top-of-book quote payloads
+- Typed, trivially-copyable `MarketEvent` envelope carrying top-of-book quote payloads
+- Integer-id symbol/currency interning (`SymbolRegistry`) built once at adapter open; only ids cross the hot path
 - `ReplayAdapter` boundary with a CSV replay implementation
 - `BookBuilder` maintains the latest valid top-of-book per symbol
 - Logical replay clock by default, with optional fixed wall-time delay
@@ -117,5 +118,5 @@ When plotting multiple JSON reports, the script creates one subdirectory per rep
 Current benchmark note:
 
 - Queue-depth statistics are sampled on the producer side immediately after each measured enqueue.
-- `max_queue_depth` can saturate at `4096`, which is the current `SPSCQueue` capacity in [spsc_queue.h](/Users/husain/Documents/cmu/projects/arbitrage-engine/cpp_engine/libs/spsc_queue.h:48). In throughput-heavy runs this means the producer is fully flooding the queue and spinning on capacity, which is useful as a stress signal but not yet a tuned steady-state design.
+- The SPSC queue capacity is configurable (`EngineConfig::queue_capacity`, default `4096`; `arb_benchmark --queue-capacity <n>`). `max_queue_depth` can saturate at the configured capacity in throughput-heavy runs, meaning the producer is flooding the queue and spinning on capacity — a useful stress signal and now a tunable knob (see [benchmarks/notes/queue-sizing.md](benchmarks/notes/queue-sizing.md)).
 - The queue-depth-over-event-index series is downsampled for large runs so benchmark JSON stays usable on long replays.

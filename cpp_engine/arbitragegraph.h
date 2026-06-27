@@ -1,109 +1,83 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
-#include <deque>
-#include <unordered_map>
-#include <optional>
-#include <cstdint>
 
 #include "market_event.h"
+#include "symbol_registry.h"
 
 /**
  * @class ArbitrageGraph
  * @brief Represents the cryptocurrency market as a graph to find arbitrage opportunities.
  *
- * This class models currencies as vertices and trading pairs as weighted, directed edges.
- * It uses the Shortest Path Faster Algorithm (SPFA), an optimization of Bellman-Ford,
- * to detect negative weight cycles, which correspond to risk-free arbitrage
- * opportunities in the market.
+ * Currencies are vertices and trading pairs are weighted, directed edges. It uses
+ * the Shortest Path Faster Algorithm (SPFA), an optimization of Bellman-Ford, to
+ * detect negative-weight cycles, which correspond to risk-free arbitrage.
+ *
+ * The graph is built once from a SymbolRegistry: because every currency and
+ * symbol is known up front, the adjacency is stored in compressed-sparse-row
+ * (CSR) form and each symbol's two directed edges have fixed slots. Per-quote
+ * updates write edge weights directly by integer id with no string parsing,
+ * hashing, or container growth on the hot path.
  */
 class ArbitrageGraph {
 public:
   /**
-   * @brief Constructs the graph with an initial set of trading symbols.
-   * @param symbols A vector of strings representing trading pairs (e.g., "BTC-USD").
+   * @brief Constructs the graph from the interned symbol/currency registry.
    */
-  ArbitrageGraph(const std::vector<std::string>& symbols);
+  explicit ArbitrageGraph(const SymbolRegistry& registry);
 
   /**
-   * @brief Updates both directional edges from an executable top-of-book quote.
-   * @param symbol The trading pair (e.g. "BTC-USD").
-   * @param quote The current best bid/ask with sizes.
+   * @brief Updates both directional edges for a symbol from an executable quote.
    *
    * Forward edge BASE->QUOTE uses the bid (selling base for quote).
    * Reverse edge QUOTE->BASE uses 1/ask (buying base with quote).
    */
-  void update_quote(const std::string& symbol, const TopOfBookQuote& quote);
+  void update_quote(std::uint32_t symbol_id, const TopOfBookQuote& quote);
 
   /**
    * @brief Detects and returns an arbitrage cycle if one exists.
-   * @return An optional containing the cycle as a vector of currency strings,
-   * or nullopt if no opportunity is found.
+   * @return The cycle as currency names, or nullopt if none is found.
    */
   std::optional<std::vector<std::string>> find_arbitrage_cycle();
 
   /**
-   * @brief Gets the negative-log weight of a specific edge
-   * @param source_currency the starting currency name
-   * @param dest_currency the destination currency name
-   * @return the negative-log weight of the edge, or infinity if not found
+   * @brief Gets the negative-log weight of a specific edge, or infinity if absent.
    */
   double get_edge_weight(const std::string& source_currency, const std::string& dest_currency) const;
 
 private:
-  /**
-   * @struct Edge
-   * @brief Represents a directed edge in the graph.
-   */
   struct Edge {
-      int destination_id;
-      double weight;
+    int destination_id;
+    double weight;
   };
 
-  // --- Graph Structure ---
-  
-  /// @brief Adjacency list representation of the graph.
-  std::vector<std::vector<Edge>> adjacency_list;
-  
-  /// @brief Maps currency string names to their unique integer IDs.
-  std::unordered_map<std::string, int> currency_to_id;
-  
-  /// @brief Maps unique integer IDs back to their currency string names.
-  std::vector<std::string> id_to_currency;
-  
-  /// @brief Provides O(1) lookup for edge weights to avoid linear scans.
-  std::unordered_map<uint64_t, size_t> edge_index_map;
+  // Fixed edge positions for a symbol's two directed edges, plus the endpoint
+  // vertex ids so dirty tracking needs no lookup.
+  struct EdgeSlots {
+    std::uint32_t forward_index;
+    std::uint32_t reverse_index;
+    int base_id;
+    int quote_id;
+  };
 
-  // --- SPFA Algorithm Data ---
-  
-  /// @brief The total number of unique currencies (vertices) in the graph.
+  // --- Graph structure (CSR adjacency, built once) ---
+  std::vector<Edge> edges_;                  ///< Flat edge array.
+  std::vector<int> row_start_;               ///< Per-vertex offsets, size num_vertices+1.
+  std::vector<EdgeSlots> symbol_edge_slots_; ///< Indexed by symbol_id.
+  std::vector<std::string> id_to_currency_;  ///< Vertex id -> currency name.
+
   int num_vertices = 0;
-  
-  /// @brief Stores the shortest distance from the source to each vertex.
+
+  // --- SPFA working state (reused across detections) ---
   std::vector<double> distance;
-  
-  /// @brief Stores the predecessor of each vertex in the shortest path tree.
   std::vector<int> predecessor;
-  
-  /// @brief Counts updates to each vertex's distance to detect negative cycles.
   std::vector<int> update_counts;
-
-  /// @brief Tracks whether a vertex is currently in the dirty_vertices queue (prevents duplicates).
   std::vector<bool> in_queue;
-
-  /// @brief Queue of vertices whose distances have been updated, for SPFA optimization.
-  std::deque<int> dirty_vertices;
-
-  // --- Private Helper Functions ---
-
-  /**
-   * @brief Creates a unique 64-bit key for a directed edge.
-   * @param source_id The integer ID of the source vertex.
-   * @param destination_id The integer ID of the destination vertex.
-   * @return A unique 64-bit integer key.
-   */
-  uint64_t create_edge_key(int source_id, int destination_id) const;
+  std::vector<int> dirty_vertices_;  ///< Vertices touched since last detection.
+  std::vector<int> spfa_queue_;      ///< Reused FIFO buffer for SPFA.
 
   std::optional<std::vector<std::string>> reconstruct_cycle(int start_node) const;
 };
