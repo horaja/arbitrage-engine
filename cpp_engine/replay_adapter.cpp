@@ -118,9 +118,29 @@ bool parse_timestamp_ns(std::string_view value, std::int64_t& out) {
     return true;
   }
 
-  if (value.size() == 20 && value.back() == 'Z') {
+  if (!value.empty() && value.back() == 'Z') {
     value.remove_suffix(1);
   }
+
+  std::int64_t fraction_ns = 0;
+  const std::size_t dot_pos = value.find('.');
+  if (dot_pos != std::string_view::npos) {
+    const std::string_view fraction = value.substr(dot_pos + 1);
+    value = value.substr(0, dot_pos);
+    if (fraction.empty() || fraction.size() > 9 || !all_digits(fraction)) {
+      return false;
+    }
+    unsigned fraction_value = 0;
+    if (!parse_uint(fraction, fraction_value)) {
+      return false;
+    }
+    std::int64_t scaled = fraction_value;
+    for (std::size_t digit = fraction.size(); digit < 9; ++digit) {
+      scaled *= 10;
+    }
+    fraction_ns = scaled;
+  }
+
   if (value.size() != 19 || value[4] != '-' || value[7] != '-' || value[10] != 'T' ||
       value[13] != ':' || value[16] != ':') {
     return false;
@@ -143,7 +163,7 @@ bool parse_timestamp_ns(std::string_view value, std::int64_t& out) {
 
   const std::int64_t days = days_from_civil(static_cast<std::int64_t>(year), month, day);
   const std::int64_t epoch_seconds = days * 86400 + hour * 3600 + minute * 60 + second;
-  out = epoch_seconds * 1000000000LL;
+  out = epoch_seconds * 1000000000LL + fraction_ns;
   return true;
 }
 
